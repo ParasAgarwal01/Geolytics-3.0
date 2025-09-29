@@ -13,9 +13,26 @@ from typing import Literal
 from shapely.geometry import box
 import tempfile
 import io
+import re
+
 
 drive_test_store = {"df": None}
 
+
+def extract_band(val):
+    if not val:
+        return None
+    s = str(val).upper()
+    match = re.search(r"\bN\d{2}\b", s)
+    if match:
+        return match.group(0)
+    match = re.search(r"N\d{2}(?!\d)", s)
+    if match:
+        return match.group(0)
+    return None
+
+
+grid_data = None
 
 # === Setup logging ===
 logger = logging.getLogger(__name__)
@@ -31,7 +48,8 @@ os.makedirs(TEMPLATE_DIR, exist_ok=True)
 app = FastAPI(root_path="/geo-api")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=["*"],
+    # allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -69,6 +87,24 @@ def get_columns_for_table(table: str):
         if not column_list:
             raise HTTPException(status_code=404, detail=f"Table '{table}' not found.")
         return column_list
+    
+from fastapi import HTTPException
+from sqlalchemy import text
+
+@app.get("/distinct-values/{table}")
+async def get_distinct_values(table: str, col: str):
+    if not table or not col:
+        raise HTTPException(status_code=400, detail="Table and column are required")
+
+    try:
+        with engine.connect() as conn:
+            query = text(f'SELECT DISTINCT "{col}" FROM "{table}" WHERE "{col}" IS NOT NULL LIMIT 200')
+            result = conn.execute(query)
+            values = [row[0] for row in result if row[0] is not None]
+
+        return values
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch values: {str(e)}")
 
 @app.post("/query")
 async def query_data(payload: dict):
@@ -83,11 +119,17 @@ async def query_data(payload: dict):
     kpi_column = payload.get("kpiColumn") or ""
 
     if not all([physical_table, physical_columns_map]):
-        raise HTTPException(status_code=400, detail="`physical_table` and `physical_columns` are required.")
+        raise HTTPException(
+            status_code=400,
+            detail="`physical_table` and `physical_columns` are required."
+        )
 
     required_roles = ["site_id", "cellname", "lat", "lon", "azimuth"]
     if not all(role in physical_columns_map for role in required_roles):
-        raise HTTPException(status_code=400, detail=f"All required roles must be mapped: {required_roles}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"All required roles must be mapped: {required_roles}"
+        )
 
     with engine.connect() as conn:
         all_tables = [row[0] for row in conn.execute(
@@ -101,15 +143,15 @@ async def query_data(payload: dict):
             {"table": physical_table}
         )]
 
-        # Ensure selected column names are valid
-        for col in list(physical_columns_map.values()) + physical_extra_cols:
-            if col not in all_physical_cols:
-                raise HTTPException(status_code=400, detail=f"Invalid column in physical table: {col}")
+        # --- Build SELECT clause ---
+        select_clauses = [f'p."{col}" AS "{role}"' for role, col in physical_columns_map.items()]
 
-        # === SELECT Clause Construction ===
-        select_clauses = [
-            f'p."{col}" AS "{role}"' for role, col in physical_columns_map.items()
-        ]
+        # Include city column if it exists
+        if "city" in all_physical_cols:
+            select_clauses.append('p."city" AS "city"')
+        elif "City" in all_physical_cols:
+            select_clauses.append('p."City" AS "city"')
+
         for col in physical_extra_cols:
             select_clauses.append(f'p."{col}" AS "{col}"')
 
@@ -117,34 +159,22 @@ async def query_data(payload: dict):
             if col and col in all_physical_cols and col not in physical_columns_map.values() and col not in physical_extra_cols:
                 select_clauses.append(f'p."{col}" AS "{col}"')
 
-        # === JOIN Clause Construction ===
+        # Auto-detect band column
+        if not band_column:
+            auto_band_cols = [c for c in all_physical_cols if "band" in c.lower()]
+            if auto_band_cols:
+                band_column = auto_band_cols[0]
+                select_clauses.append(f'p."{band_column}" AS "{band_column}"')
+
+        # --- Join clauses ---
         join_clauses = ""
         join_alias_counter = 1
         for join in target_joins:
             target_table = join.get("table")
             target_columns = join.get("target_columns", [])
             join_on = join.get("join_on", {})
-
-            if not (target_table and join_on and "physical" in join_on and "target" in join_on):
-                raise HTTPException(status_code=400, detail="Invalid target join configuration.")
-            if target_table not in all_tables:
-                raise HTTPException(status_code=400, detail=f"Invalid target_table: {target_table}")
-
-            all_target_cols = [row[0] for row in conn.execute(
-                text("SELECT column_name FROM information_schema.columns WHERE table_name = :table"),
-                {"table": target_table}
-            )]
-            for col in target_columns:
-                if col not in all_target_cols:
-                    raise HTTPException(status_code=400, detail=f"Invalid column in {target_table}: {col}")
-
-            join_phys_col = join_on["physical"]
-            join_target_col = join_on["target"]
-            if join_phys_col not in all_physical_cols or join_target_col not in all_target_cols:
-                raise HTTPException(status_code=400, detail=f"Invalid join keys between {physical_table} and {target_table}")
-
             alias = f"t{join_alias_counter}"
-            join_clauses += f' LEFT JOIN "{target_table}" AS {alias} ON p."{join_phys_col}" = {alias}."{join_target_col}"'
+            join_clauses += f' LEFT JOIN "{target_table}" AS {alias} ON p."{join_on["physical"]}" = {alias}."{join_on["target"]}"'
             for col in target_columns:
                 select_clauses.append(f'{alias}."{col}" AS "{target_table}_{col}"')
             join_alias_counter += 1
@@ -152,7 +182,6 @@ async def query_data(payload: dict):
         select_sql = ", ".join(select_clauses)
         where_sql = f'WHERE p."{physical_columns_map["lat"]}" IS NOT NULL AND p."{physical_columns_map["lon"]}" IS NOT NULL'
         full_query = f'SELECT {select_sql} FROM "{physical_table}" AS p{join_clauses} {where_sql}'
-
         logger.info("🚨 Final SQL Query: %s", full_query)
 
         try:
@@ -161,26 +190,33 @@ async def query_data(payload: dict):
             raise HTTPException(status_code=500, detail=f"Database query failed: {str(e)}")
 
         features = []
+        all_bands = set()
+
         for row in result:
             row_dict = dict(row)
-
             try:
                 lon = float(row_dict.pop("lon"))
                 lat = float(row_dict.pop("lat"))
-                azimuth = float(row_dict.get("azimuth", 0))
 
-                # Parse KPI and other dynamic columns robustly
+                # Parse KPI / dynamic columns
                 for col in {layer_column, band_column, kpi_column}:
                     if col in row_dict:
-                        val = row_dict[col]
                         try:
-                            parsed = float(val)
-                            if str(parsed).lower() in ["", "null", "--"]:
-                                row_dict[col] = None
-                            else:
-                                row_dict[col] = parsed
-                        except (TypeError, ValueError):
-                            row_dict[col] = None
+                            val = float(row_dict[col])
+                            row_dict[col] = None if str(val).lower() in ["", "null", "--"] else val
+                        except (ValueError, TypeError):
+                            row_dict[col] = row_dict[col]
+
+                # Extract/normalize band
+                band_val = row_dict.get(band_column) or row_dict.get("BAND") or row_dict.get("band") or row_dict.get("cellname")
+                norm_band = extract_band(band_val)
+                if norm_band:
+                    row_dict["band"] = norm_band
+                    all_bands.add(norm_band)
+
+                # Ensure city is included
+                city_val = row_dict.get("city") or "Unknown"
+                row_dict["city"] = city_val
 
                 features.append({
                     "type": "Feature",
@@ -188,13 +224,17 @@ async def query_data(payload: dict):
                     "properties": row_dict
                 })
 
-            except (ValueError, TypeError, KeyError):
+            except (ValueError, TypeError, KeyError) as e:
+                logger.warning(f"Skipping row due to error: {e}")
                 continue
 
-    if features:
-        logger.info("✅ Sample feature property keys: %s", list(features[0]["properties"].keys()))
+    return {
+        "type": "FeatureCollection",
+        "features": features,
+        "bands": sorted(list(all_bands))
+    }
 
-    return {"type": "FeatureCollection", "features": features}
+
 @app.get("/drive-test/columns")
 def get_drive_test_columns():
     df = drive_test_store["df"]
@@ -211,6 +251,80 @@ def get_drive_test_columns():
         ]
 
     return {"columns": available_kpis}
+
+@app.post("/upload-grid-map")
+async def upload_grid_map(file: UploadFile = File(...)):
+    global grid_data
+    contents = await file.read()
+    df = pd.read_csv(io.BytesIO(contents), encoding="utf-8-sig")
+
+    if df.empty:
+        raise HTTPException(status_code=400, detail="❌ Uploaded file is empty")
+
+    grid_data = df.copy()
+
+    # --- Detect lat/lon ---
+    lat_col, lon_col = None, None
+    if "Lat" in df.columns and "Long" in df.columns:
+        lat_col, lon_col = "Lat", "Long"
+    else:
+        lat_keywords = ["lat", "latitude", "y", "gps_lat", "positioning_lat"]
+        lon_keywords = ["lon", "lng", "long", "longitude", "x", "gps_lon", "gps_lng"]
+        lat_col = next((c for c in df.columns if any(k in c.lower().replace(" ", "").replace("_", "") for k in lat_keywords)), None)
+        lon_col = next((c for c in df.columns if any(k in c.lower().replace(" ", "").replace("_", "") for k in lon_keywords)), None)
+
+    if not lat_col or not lon_col:
+        return {
+            "error": "Could not detect latitude/longitude columns",
+            "columns": df.columns.tolist(),
+            "sample_rows": df.head(3).to_dict(orient="records"),
+        }
+
+    print(f"📍 Using lat_col={lat_col}, lon_col={lon_col}")
+
+    # --- Clean invalid values ---
+    df = df.dropna(subset=[lat_col, lon_col])
+    df = df.replace([float("inf"), float("-inf")], None)
+
+    # --- Build GeoJSON ---
+    features = []
+    for _, row in df.iterrows():
+        try:
+            lon, lat = float(row[lon_col]), float(row[lat_col])
+            if not (-180 <= lon <= 180 and -90 <= lat <= 90):
+                continue
+
+            props = {k: (None if pd.isna(v) or v in [float("inf"), float("-inf")] else v) for k, v in row.to_dict().items()}
+
+            # Include city if exists
+            if "city" in props:
+                props["city"] = props.get("city")
+            elif "City" in props:
+                props["city"] = props.get("City")
+            else:
+                props["city"] = "Unknown"
+
+            features.append({
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": props,
+            })
+        except Exception as e:
+            print("⚠️ Skipped row:", e)
+            continue
+
+    geojson = {"type": "FeatureCollection", "features": features}
+
+    # --- Pick KPIs: numeric columns only (exclude lat/lon) ---
+    exclude_cols = {lat_col, lon_col}
+    numeric_cols = df.drop(columns=list(exclude_cols), errors="ignore").select_dtypes(include=["number"]).columns.tolist()
+
+    return {
+        "geojson": geojson,
+        "available_kpis": numeric_cols
+    }
+
+
 
 
 @app.post("/save-template")
@@ -284,6 +398,20 @@ async def export_data(request: Request):
         return StreamingResponse(io.BytesIO(kml_bytes.encode('utf-8')), media_type="application/vnd.google-earth.kml+xml", headers={"Content-Disposition": "attachment; filename=export.kml"})
     else:
         raise HTTPException(status_code=400, detail="Invalid format requested.")
+
+@app.get("/grid-map/column-range")
+async def get_grid_map_column_range(column: str):
+    global grid_data
+    if grid_data is None:
+        return {"min": None, "max": None}
+
+    if column not in grid_data.columns:
+        return {"min": None, "max": None}
+
+    col_min = grid_data[column].min()
+    col_max = grid_data[column].max()
+    return {"min": float(col_min), "max": float(col_max)}
+
 
 
 @app.post("/upload-drive-test")
@@ -383,6 +511,9 @@ async def upload_drive_test(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Server crash: {str(e)}")
     
+
+
+    
     
     
 @app.get("/drive-test/column-range")
@@ -425,16 +556,6 @@ def get_drive_test_column_range(column: str):
     # fallback
     return {"error": f"Unsupported column type: {col_series.dtype}"}
 
-
-
-
-
-    
-
-
-
- 
-
 @app.post("/generate-grid")
 async def generate_grid(
     file: UploadFile = File(...),
@@ -470,19 +591,80 @@ async def generate_grid(
         return {"error": str(e)}
     
 
-# @app.get("/drive-test/columns")
-# def get_drive_test_columns():
-#     df = drive_test_store["df"]
 
-#     if df is None:
-#         raise HTTPException(status_code=404, detail="No drive test data uploaded")
+@app.get("/grid-map/from-table")
+def get_grid_map_from_table(table: str):
+    global grid_data
+    try:
+        with engine.connect() as conn:
+            cols = [r[0] for r in conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name=:t"),
+                {"t": table}
+            )]
+            print("✅ Available columns:", cols)
 
-#     available_kpis = drive_test_store.get("columns", [])
+            lat_col = next((c for c in cols if c.lower() in ["lat", "latitude"]), None)
+            lon_col = next((c for c in cols if c.lower() in ["lon", "long", "lng", "longitude"]), None)
 
-#     # Fallback if not populated yet
-#     if not available_kpis:
-#         available_kpis = [
-#             col for col in df.columns if pd.api.types.is_numeric_dtype(df[col])
-#         ]
+            if not lat_col or not lon_col:
+                raise HTTPException(status_code=400, detail=f"No lat/lon columns found in {table}")
 
-#     return {"columns": available_kpis}
+            query = text(f'SELECT * FROM "{table}" WHERE "{lat_col}" IS NOT NULL AND "{lon_col}" IS NOT NULL')
+            res = conn.execute(query)
+            res = conn.execute(query)
+            rows = [dict(r) for r in res.mappings()]
+
+
+        import pandas as pd
+        grid_data = pd.DataFrame(rows)
+        print(f"✅ Loaded {len(rows)} rows from {table}")
+
+        features = []
+        for row in rows:
+            try:
+                lat, lon = float(row[lat_col]), float(row[lon_col])
+                props = {k: v for k, v in row.items() if k not in [lat_col, lon_col]}
+                features.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                    "properties": props
+                })
+            except Exception as e:
+                print("⚠️ Skipped row:", e)
+
+        return {
+            "geojson": {"type": "FeatureCollection", "features": features},
+            "available_kpis": [c for c in cols if c not in [lat_col, lon_col]]
+        }
+    except Exception as e:
+        print("❌ ERROR in /grid-map/from-table:", e)
+        raise
+
+
+@app.get("/bands/{table}")
+def get_bands(table: str):
+    try:
+        with engine.connect() as conn:
+            # Fetch all column names
+            cols = [r[0] for r in conn.execute(
+                text("SELECT column_name FROM information_schema.columns WHERE table_name=:t"),
+                {"t": table}
+            )]
+
+            # Detect band + cellname columns
+            band_col = next((c for c in cols if "band" in c.lower()), None)
+            cell_col = next((c for c in cols if "cell" in c.lower()), None)
+
+            if not band_col or not cell_col:
+                return []  # gracefully return empty
+
+            query = text(f'SELECT DISTINCT "{band_col}", "{cell_col}" FROM "{table}" WHERE "{band_col}" IS NOT NULL')
+            rows = conn.execute(query).fetchall()
+
+            return [{"band": r[0], "cellname": r[1]} for r in rows]
+
+    except Exception as e:
+        print(f"❌ Error in /bands/{table}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch bands")
+
+

@@ -1,28 +1,17 @@
 {
-  "name": "paras_temp1",
+  "name": "Paras_temp1",
   "config": {
-    "phdbTable": "5GUL_AllData_PHDB_20250617",
+    "phdbTable": "TPG_PHDB_4G_5G",
     "requiredCols": {
-      "site_id": "CELL_AVG_UL_RIP_SCHED_PRB1__M55360C00001_",
-      "cellname": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_",
-      "lat": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_",
-      "lon": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_",
-      "azimuth": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_"
+      "site_id": "SITENAME",
+      "cellname": "CELLNAME",
+      "lat": "LATITUDE",
+      "lon": "LONGITUDE",
+      "azimuth": "AZIMUTH"
     },
-    "popupColumns": [
-      "CELL_AVG_UL_RIP_SCHED_PRB1__M55360C00001_"
-    ],
-    "targetTable": "delta_cell_wk_5g",
-    "targetColsSelected": [
-      "Vendor",
-      "Priority"
-    ],
-    "joinOn": {
-      "physical": "CELL_AVG_UL_RIP_SCHED_PRB1__M55360C00001_",
-      "target": "Vendor"
-    },
-    "layerColumn": "CELL_AVG_UL_RIP_SCHED_PRB1__M55360C00001_",
-    "bandColumn": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_",
-    "kpiColumn": "CELL_AVG_UL_RIP_SCHED_PRB138__M55360C00138_"
+    "popupColumns": [],
+    "target_joins": [],
+    "layerColumn": "BAND",
+    "bandColumn": ""
   }
 }

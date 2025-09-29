@@ -1,0 +1,17 @@
+{
+  "name": "Paras_new_temp",
+  "config": {
+    "phdbTable": "TPG_5G_PHDB",
+    "requiredCols": {
+      "site_id": "SITENAME",
+      "cellname": "CELLNAME",
+      "lat": "LATITUDE",
+      "lon": "LONGITUDE",
+      "azimuth": "AZIMUTH"
+    },
+    "popupColumns": [],
+    "target_joins": [],
+    "layerColumn": "",
+    "bandColumn": ""
+  }
+}

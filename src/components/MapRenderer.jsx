@@ -44,17 +44,46 @@ const addHighlightLayer = (map, feature) => {
 
 // Use Vite's env for the token
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
+
+const enrichGeoJSON = (rawGeoJSON, cityLookup = {}, kpiList = []) => {
+  if (!rawGeoJSON?.features?.length) return rawGeoJSON;
+
+  return {
+    ...rawGeoJSON,
+    features: rawGeoJSON.features.map((f) => {
+      const cell = f.properties?.Cell_name || f.properties?.cellname;
+      const enrichedProps = {
+        ...f.properties,
+        city: cityLookup?.[cell] || f.properties?.city || 'unknown',
+      };
+
+      // Enrich numeric KPIs
+      kpiList.forEach((kpi) => {
+        const rawValue = enrichedProps[kpi];
+        enrichedProps[`__${kpi}`] =
+          rawValue == null || rawValue === '' || isNaN(Number(rawValue))
+            ? NaN
+            : Number(rawValue);
+      });
+
+      return { ...f, properties: enrichedProps };
+    }),
+  };
+};
+
 const enrichGeoJSONWithKPIs = (geojson, kpiData, joinKey = 'cellname') => {
   return {
     ...geojson,
     features: geojson.features.map(f => {
       const joinValue = f.properties?.[joinKey];
-      const matchingKpis = kpiData[joinValue] || {}; // Object with many KPI keys
+      const matchingKpis = kpiData[joinValue] || {}; 
       return {
         ...f,
         properties: {
+          ...props, 
           ...f.properties,
-          ...matchingKpis
+          ...matchingKpis,
+          city: cityLookup[joinValue] || 'unknown', 
         }
       };
     })
@@ -63,7 +92,7 @@ const enrichGeoJSONWithKPIs = (geojson, kpiData, joinKey = 'cellname') => {
 function generateSectorGeoJSON(data, selectedCellBand, colorRanges) {
   let firstColoredFeature = null;
 
-  // 1️⃣ Filter to only selected cells
+  
   let filteredData = data;
   if (Array.isArray(selectedCellBand) && selectedCellBand.length > 0) {
     filteredData = data.filter((props) =>
@@ -71,39 +100,41 @@ function generateSectorGeoJSON(data, selectedCellBand, colorRanges) {
     );
   }
 
-  // 2️⃣ Sort highest → lowest band number
+  
   filteredData.sort((a, b) => {
     const numA = parseInt((a.BAND || a.band || "").replace(/\D/g, "")) || 0;
     const numB = parseInt((b.BAND || b.band || "").replace(/\D/g, "")) || 0;
     return numB - numA;
   });
 
-  // 3️⃣ Generate features with chosen color + concentric size
+ 
   const features = filteredData.map((props, idx) => {
-    const { site_id, cellname, azimuth } = props;
+    const { site_id, cellname, azimuth, city } = props;
 
-    // Get user-selected color
+
     const fillColor =
       (colorRanges[cellname] &&
         Object.keys(colorRanges[cellname]).length > 0 &&
-        Object.keys(colorRanges[cellname])[0]) || "#ccc"; // First color name key OR fallback
+        Object.keys(colorRanges[cellname])[0]) || "#ccc"; 
 
-    // For concentric polygons: shrink radius per index
-    const maxRadius = 500; // adjust to your scale
-    const scaleFactor = 1 - idx * 0.15; // shrink each layer
+   
+    const maxRadius = 500; 
+    const scaleFactor = 1 - idx * 0.15; 
     const geometry = generateSectorGeometry(azimuth, maxRadius * scaleFactor);
 
     const feature = {
-      type: "Feature",
-      geometry,
-      properties: {
-        site_id,
-        cellname,
-        band: props.BAND || props.band || props.Band || "default",
-        azimuth,
-        color: fillColor,
-      },
-    };
+  type: "Feature",
+  geometry,
+  properties: {
+    ...props, 
+    band: props.BAND || props.band || props.Band || "default",
+    color: fillColor,
+    azimuth,
+    city: props.city || "unknown", 
+    site_id,
+  },
+};
+
 
     if (!firstColoredFeature && fillColor !== "#ccc") {
       firstColoredFeature = feature;
@@ -126,23 +157,45 @@ function getColorForValue(value, colorBands) {
   for (const { color, from, to } of colorBands) {
     if (value >= from && value <= to) return color;
   }
-  return '#cccccc'; // Default gray
+  return '#cccccc'; 
 }
 
 
 
-// === Sector Utility ===
-const createSectorPolygon = (center, radiusKm, azimuth, beamWidth = 45) => {
+
+
+
+// Compute dynamic radius based on clutter, density, zoom, and user scale
+// const getDynamicRadius = (props, mapZoom, siteDensity, userScale = 1) => {
+//   let baseRadius = 0.1; // km default
+//   const clutter = props.clutter_type?.toLowerCase();
+
+//   // if (clutter === "urban") baseRadius = 0.2;
+//   // else if (clutter === "suburban") baseRadius = 0.4;
+//   // else if (clutter === "rural") baseRadius = 0.8;
+
+//   // const densityFactor = siteDensity > 10 ? 0.6 : siteDensity > 5 ? 0.8 : 1.0;
+//   // const zoomFactor = mapZoom < 8 ? 0.5 : mapZoom < 12 ? 1.0 : 1.5;
+
+//   return baseRadius * userScale;
+// };
+
+const getDynamicRadius = (_props, _mapZoom, _siteDensity, userScale = 1) => {
+  return userScale; // directly use slider radius (already in km)
+};
+const createSectorPolygon = (center, radiusKm, azimuth, beamWidth = 65) => {
   const points = [center];
   const startAngle = azimuth - beamWidth / 2;
   const endAngle = azimuth + beamWidth / 2;
+
   for (let angle = startAngle; angle <= endAngle; angle += 5) {
-    const destination = turf.destination(center, radiusKm, angle, { units: 'kilometers' });
+    const destination = turf.destination(center, radiusKm, angle, { units: "kilometers" });
     points.push(destination.geometry.coordinates);
   }
   points.push(center);
   return turf.polygon([points]);
 };
+
 
 const getColorForBand = (band) => {
   const colors = {
@@ -168,18 +221,34 @@ const BAND_OPTIONS = [
   { value: '2300', label: '2300 MHz' }
 ];
 
-// Simple info popup (used for both points and polygons)
+
 const createPopupHtml = (properties) => {
+  const escapeHtml = (str) => 
+    String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+
   let html = `<div class="popup-table-bordered">
     <table>
       <thead>
         <tr><th>Property</th><th>Value</th></tr>
       </thead>
       <tbody>`;
-  
+
   for (const key in properties) {
-    const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase());
-    const value = properties[key] ?? '';
+    const formattedKey = key.replace(/_/g, " ").replace(/\b\w/g, (l) => l.toUpperCase());
+    let value = properties[key] ?? "";
+
+    // Highlight city differently
+    if (key.toLowerCase() === "city") {
+      value = `<strong>${escapeHtml(value)}</strong>`;
+    } else {
+      value = escapeHtml(value);
+    }
+
     html += `<tr><td>${formattedKey}</td><td>${value}</td></tr>`;
   }
 
@@ -188,12 +257,25 @@ const createPopupHtml = (properties) => {
 };
 
 
+const addCityToGeoJSON = (geojson, cityLookup = {}) => {
+  if (!geojson?.features) return geojson;
+
+  geojson.features.forEach((feature) => {
+    const cell = feature.properties?.cellname || feature.properties?.Cell_name;
+    feature.properties.city =
+      feature.properties.city || cityLookup[cell] || "unknown";
+  });
+
+  return geojson;
+};
+
 const MapRenderer = ({
   geojsonData,
   driveTestGeoJSON,
   highlightedFeature: externalHighlight,
   gridGeoJSON,
   colorColumn,          
+  gridMapGeoJSON,
   colorBands,
   onSiteClick,
    selectedDriveKPI,
@@ -201,7 +283,18 @@ const MapRenderer = ({
     layerRange,
     gridData,
     driveLayerRange, 
+    layerColumn,
+    selectedGridKPI, 
+    radiusScale = 1 ,
+    selectedUniqueBands,
+    filters,
+    selectedColumnValues,
+    cityLookup,
 }) => {
+  const [enrichedGeoJSON, setEnrichedGeoJSON] = useState(null);
+
+  const [columnFilters, setColumnFilters] = useState([]);
+
   const [hasZoomedToSectors, setHasZoomedToSectors] = useState(false);
   const [rulerActive, setRulerActive] = useState(false);
   const rulerGeoJSON = useRef({ type: 'FeatureCollection', features: [] });
@@ -211,38 +304,54 @@ const MapRenderer = ({
   const mapInstance = useRef(null);
   const [driveTestColumns, setDriveTestColumns] = useState([]);
 
-  // --- Search State ---
+ 
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [highlightedFeature, setHighlightedFeature] = useState(null);
   const [searchHistory, setSearchHistory] = useState([]);
 
-  // --- KPI/Heatmap State ---
+ 
   const [selectedKPI, setSelectedKPI] = useState('null');
   const [threshold, setThreshold] = useState(17);
-  
+  // const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null);
+
+const [gridLayerRange, setGridLayerRange] = useState({ min: null, max: null });
 
 
-  // --- Panel Toggles ---
+
+ 
   const [showHeatmapPanel, setShowHeatmapPanel] = useState(false);
   const [showSearchPanel, setShowSearchPanel] = useState(false);
 
-  // --- Legend Dynamic Selection ---
+ 
   const [showLegend, setShowLegend] = useState(false);
-  const [legendType, setLegendType] = useState('kpi'); // 'kpi', 'band', 'sector', 'driveTest'
+  const [legendType, setLegendType] = useState('kpi'); 
   const [siteCellOptions, setSiteCellOptions] = useState([]);
   const [selectedCellBand, setSelectedCellBand] = useState(null);
   const [perCellColorRanges, setPerCellColorRanges] = useState({});
 
-// === Heatmap module states ===
-const [gridHeatmapGeoJSON, setGridHeatmapGeoJSON] = useState(null);
+
+
+const [selectedBandCells, setSelectedBandCells] = useState([]);
+const [bandColorMap, setBandColorMap] = useState({});
+// Remove local selectedUniqueBands state; use prop from App.jsx
 
 const [availableGridKPIs, setAvailableGridKPIs] = useState([]);
 
 
+  
 
 
-  // --- External highlight sync ---
+   useEffect(() => {
+  // whenever prop changes, update internal state
+  setColumnFilters(selectedColumnValues || []);
+}, [selectedColumnValues]);
+
+useEffect(() => {
+  if (!geojsonData) return;
+  addSectorLayer({ columnFilters });
+}, [columnFilters, selectedUniqueBands, geojsonData]);
+
   useEffect(() => {
     if (externalHighlight !== undefined) {
       setHighlightedFeature(externalHighlight);
@@ -250,7 +359,7 @@ const [availableGridKPIs, setAvailableGridKPIs] = useState([]);
     }
   }, [externalHighlight]);
  
-  // --- Ruler tool sync ---
+ 
   const rulerActiveRef = useRef(rulerActive);
   useEffect(() => {
     rulerActiveRef.current = rulerActive;
@@ -260,24 +369,42 @@ const [availableGridKPIs, setAvailableGridKPIs] = useState([]);
 
 
 
-  // inside useEffect or map load callback in MapRenderer.jsx
+useEffect(() => {
+  if (!mapInstance.current || !geojsonData) return;
+
+  const { features } = generateSectorGeoJSON(geojsonData, mapInstance.current, radiusScale);
+
+  if (mapInstance.current.getSource("sectors")) {
+    mapInstance.current.getSource("sectors").setData({
+      type: "FeatureCollection",
+      features,
+    });
+  }
+}, [radiusScale, geojsonData]); //  re-run when radiusScale changes
+
+
+
+
+
+
+ 
 useEffect(() => {
   if (!mapRef.current || !gridData) return;
   const map = mapRef.current;
 
-  // Remove old layer/source if exists
+  
   if (map.getSource("kpi-grid")) {
     map.removeLayer("kpi-grid-layer");
     map.removeSource("kpi-grid");
   }
 
-  // Add new source
+
   map.addSource("kpi-grid", {
     type: "geojson",
     data: gridData,
   });
 
-  // Add new layer
+ 
   map.addLayer({
     id: "kpi-grid-layer",
     type: "fill",
@@ -286,7 +413,7 @@ useEffect(() => {
       "fill-color": [
         "interpolate",
         ["linear"],
-        ["get", "value"], // assumes gridData features have "value"
+        ["get", "value"], 
         0, "#f7fbff",
         50, "#6baed6",
         100, "#08306b"
@@ -300,7 +427,7 @@ useEffect(() => {
 
 
 
-const generateSectorGeoJSON = (geojson) => {
+const generateSectorGeoJSON = (geojson, map, userScale = 1) => {
   const grouped = new Map();
   let firstValid = null;
 
@@ -308,27 +435,23 @@ const generateSectorGeoJSON = (geojson) => {
     const coords = feature.geometry?.coordinates;
     const props = feature.properties || {};
     const azimuth = parseFloat(props.azimuth ?? props.Azimuth);
-    const band = props.band ?? props.Band ?? 'default';
+    const band = props.band ?? props.Band ?? "default";
+    const siteId = props.site_id || props.Site_ID || props.SITEID || "unknown";
+    const city = props.city || props.City || "unknown"; // <-- extract city
 
     if (!coords || isNaN(azimuth)) return;
 
-    const key = JSON.stringify(coords) + '|' + band;
-    if (!grouped.has(key)) grouped.set(key, []);
-    if (grouped.get(key).length >= 3) return;
+    // --- Use radius from slider (userScale is in km) ---
+    const radiusKm = userScale;
 
-    const rawValue = props[colorColumn];
-    const parsedValue =
-      rawValue !== undefined &&
-      rawValue !== null &&
-      rawValue !== '' &&
-      rawValue !== 'null' &&
-      rawValue !== '--' &&
-      !isNaN(Number(rawValue))
-        ? Number(rawValue)
-        : null;
-
+    // --- Color logic ---
     const fallbackColor = getColorForBand(band);
     let dynamicColor = fallbackColor;
+    const rawValue = props[colorColumn];
+    const parsedValue =
+      rawValue !== undefined && !isNaN(Number(rawValue))
+        ? Number(rawValue)
+        : null;
 
     if (parsedValue !== null) {
       for (const { from, to, color } of colorBands || []) {
@@ -337,20 +460,22 @@ const generateSectorGeoJSON = (geojson) => {
           break;
         }
       }
-    } else {
-     
     }
 
-    const sectorPolygon = createSectorPolygon(coords, 0.3, azimuth);
+    // --- Build polygon ---
+    const sectorPolygon = createSectorPolygon(coords, radiusKm, azimuth);
 
     const sectorFeature = {
-      type: 'Feature',
+      type: "Feature",
       geometry: sectorPolygon.geometry,
       properties: {
-        ...props,
+        ...props,      // include all original fields
         band,
-        [colorColumn]: parsedValue,
+        siteId,
+        azimuth,
+        radiusKm,
         color: dynamicColor,
+        city: props.city || "unknown",// <-- include city
       },
     };
 
@@ -358,16 +483,21 @@ const generateSectorGeoJSON = (geojson) => {
       firstValid = sectorFeature;
     }
 
-    grouped.get(key).push(sectorFeature);
+    // --- Group by site + azimuth (NOT band) ---
+    const key = `${siteId}|${azimuth}`;
+    if (!grouped.has(key)) {
+      grouped.set(key, sectorFeature); // keep only first per azimuth
+    }
   });
 
   return {
-    type: 'FeatureCollection',
-    features: Array.from(grouped.values()).flat(),
+    type: "FeatureCollection",
+    features: Array.from(grouped.values()), // only 1 per azimuth
     firstValidFeature: firstValid,
-    groupedCells: grouped
+    groupedCells: grouped,
   };
 };
+
 
 
 
@@ -405,7 +535,7 @@ const firstValid = filteredFeatures[0];
     type: 'circle',
     source: 'thematic',
     paint: {
-      'circle-radius': 6,
+      'circle-radius': 0,
       'circle-opacity': 0.8,
       'circle-stroke-width': 1,
       'circle-stroke-color': '#000',
@@ -433,218 +563,416 @@ const firstValid = filteredFeatures[0];
   }
 
 };
+//heatMap
+// === Add Grid Map Layer ===
+const addGridMapLayer = (kpi, ranges) => {
+  const map = mapInstance.current;
+  if (!map) {
+    
+    return;
+  }
+  if (!gridMapGeoJSON?.features?.length) {
+    
+    return;
+  }
 
+  if (!kpi || !ranges || Object.keys(ranges).length === 0) {
+    
+    return;
+  }
 
+  
 
+  // 🔄 Reset old layers/sources
+  ["gridMap-points", "gridMap-heatmap"].forEach((layer) => {
+    if (map.getLayer(layer)) {
+      
+      map.removeLayer(layer);
+    }
+  });
+  if (map.getSource("grid-map")) {
+    
+    map.removeSource("grid-map");
+  }
 
-
-
-// === Add Sector Layer ===
-const addSectorLayer = (map, data, selectedBandCells = [], bandColorMap = {}) => {
-  const { features, firstValidFeature } = generateSectorGeoJSON(data);
-
-
-  // Base GeoJSON for thematic coloring
-  const sectorGeoJSON = {
+  // ✅ Prepare GeoJSON with numeric values
+  const pointGeoJSON = {
     type: "FeatureCollection",
-    features,
+    features: gridMapGeoJSON.features.map((f) => {
+      const raw = f.properties[kpi];
+      const value =
+        raw === null || raw === undefined || raw === "" || isNaN(Number(raw))
+          ? NaN
+          : Number(raw);
+
+      return {
+        type: "Feature",
+        geometry: f.geometry,
+        properties: {
+          
+          ...f.properties,
+          __numericValue: value,
+        },
+      };
+    }),
   };
 
-  // --- Add/Update base sector layer ---
+  
+
+  // ✅ Add source back
+  map.addSource("grid-map", { type: "geojson", data: pointGeoJSON });
+
+  // === Auto zoom to dataset region ===
+  try {
+    const bounds = turf.bbox(pointGeoJSON);
+    map.fitBounds(bounds, { padding: 50, maxZoom: 12 });
+    
+  } catch (err) {
+    
+  }
+
+  // === Build circle color scale dynamically from Sidebar ranges ===
+  const circleColorExpr = ["interpolate", ["linear"], ["to-number", ["get", "__numericValue"]]];
+  Object.entries(ranges).forEach(([color, [min, max]]) => {
+    circleColorExpr.push(min, color);
+    circleColorExpr.push(max, color);
+  });
+  
+
+  // === Circle Layer (points) ===
+  map.addLayer({
+    id: "gridMap-points",
+    type: "circle",
+    source: "grid-map",
+    paint: {
+      "circle-radius": 4,
+      "circle-color": circleColorExpr,
+    },
+  });
+  
+
+  // === Heatmap Layer ===
+  const rangeKeys = Object.keys(ranges);
+  const firstRange = ranges[rangeKeys[0]];
+  const lastRange = ranges[rangeKeys[rangeKeys.length - 1]];
+
+  map.addLayer({
+    id: "gridMap-heatmap",
+    type: "heatmap",
+    source: "grid-map",
+    paint: {
+      "heatmap-weight": [
+        "interpolate",
+        ["linear"],
+        ["to-number", ["get", "__numericValue"]],
+        firstRange[0], 0,
+        lastRange[1], 1,
+      ],
+      "heatmap-intensity": 1,
+      "heatmap-radius": 15,
+      "heatmap-opacity": 0.8,
+      "heatmap-color": [
+        "interpolate",
+        ["linear"],
+        ["heatmap-density"],
+        0, "rgba(0,0,255,0)",
+        0.2, "blue",
+        0.4, "cyan",
+        0.6, "lime",
+        0.8, "yellow",
+        1, "red",
+      ],
+    },
+  });
+  
+
+  // === Hover popup for points (bind once) ===
+  map.off("mousemove", "gridMap-points"); // remove old
+  map.off("mouseleave", "gridMap-points");
+
+  const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
+  map.on("mousemove", "gridMap-points", (e) => {
+    if (!e.features?.length) return;
+    const feature = e.features[0];
+    const value = feature.properties[kpi];
+    if (value == null) return;
+
+    popup
+      .setLngLat(e.lngLat)
+      .setHTML(`
+        <div style="font-size: 12px; line-height: 1.4">
+          <strong>${kpi}</strong>: ${value}
+        </div>
+      `)
+      .addTo(map);
+  });
+
+  map.on("mouseleave", "gridMap-points", () => popup.remove());
+  
+};
+
+
+
+
+
+
+const addSectorLayer = (
+  map,
+  data,
+  selectedBandCells = [],
+  bandColorMap = {},
+  selectedUniqueBands = [],
+  selectedColumnFilters = [],
+  layerColumn = null,        // 👈 column name to color by
+  colorRanges = {}           // 👈 ranges { columnName: { color: [min,max] } }
+) => {
+  if (!map || !data) return;
+
+  console.log("=== addSectorLayer called ===");
+  console.log("Selected Band Cells:", selectedBandCells);
+  console.log("Band Color Map:", bandColorMap);
+  console.log("Selected Unique Bands:", selectedUniqueBands);
+  console.log("Selected Column Filters:", selectedColumnFilters);
+  console.log("Layer Column:", layerColumn);
+  console.log("Color Ranges:", colorRanges);
+  console.log("Number of features before filtering:", data.length);
+
+  // === Generate all polygons ===
+  let { features = [], firstValidFeature } = generateSectorGeoJSON(
+    data,
+    map,
+    radiusScale
+  );
+
+  console.log("Number of features after generateSectorGeoJSON:", features.length);
+  console.log("Sample feature properties:", features[0]?.properties);
+
+  // === Band filter ===
+  if (Array.isArray(selectedUniqueBands) && selectedUniqueBands.length > 0) {
+    const bandsSet = new Set(
+      selectedUniqueBands.map((b) => String(b).toUpperCase().trim())
+    );
+    features = features.filter((f) => {
+      const bandName = (f.properties.band || "").toUpperCase().trim();
+      return bandsSet.has(bandName);
+    });
+    console.log("Number of features after band filter:", features.length);
+  }
+
+  // === Column filters ===
+  if (Array.isArray(selectedColumnFilters) && selectedColumnFilters.length > 0) {
+    console.log("🟢 Applying column filters:", selectedColumnFilters);
+
+    features = features.filter((feature) => {
+      const props = feature.properties || {};
+      return selectedColumnFilters.every(({ column, values }) => {
+        if (!column || !Array.isArray(values) || values.length === 0) return true;
+
+        const propValue = String(
+          props[column] ??
+            props[column.toLowerCase()] ??
+            props[column.toUpperCase()] ??
+            ""
+        )
+          .trim()
+          .toLowerCase();
+
+        const selectedVals = new Set(
+          values.map((v) => String(v).trim().toLowerCase())
+        );
+
+        return selectedVals.has(propValue);
+      });
+    });
+
+    console.log("Number of features after ALL column filters:", features.length);
+  }
+
+  // === Prepare GeoJSON ===
+  console.log("Sample props in features:", features[0]?.properties);
+  const sectorGeoJSON = { type: "FeatureCollection", features };
   if (!map.getSource("sectors")) {
     map.addSource("sectors", { type: "geojson", data: sectorGeoJSON });
   } else {
     map.getSource("sectors").setData(sectorGeoJSON);
   }
 
+  // === Build fill-color expression ===
+  let fillColorExpr = ["get", "color"]; // fallback
+
+  if (layerColumn && colorRanges[layerColumn]) {
+    const bands = Object.entries(colorRanges[layerColumn]);
+    bands.sort(([, [minA]], [, [minB]]) => minA - minB);
+
+    // Mapbox step expression: [step, ["get", col], default, stop1, color1, stop2, color2...]
+    fillColorExpr = ["step", ["to-number", ["get", layerColumn]], "#cccccc"];
+    bands.forEach(([color, [min]]) => {
+      fillColorExpr.push(min, color);
+    });
+
+    console.log("🎨 Using dynamic color expression for", layerColumn, fillColorExpr);
+  }
+
+  // === Add/Update fill layer ===
   if (!map.getLayer("sector-layer")) {
     map.addLayer({
       id: "sector-layer",
       type: "fill",
       source: "sectors",
       paint: {
-        "fill-color": ["get", "color"],
+        "fill-color": fillColorExpr,
         "fill-opacity": 0.6,
         "fill-outline-color": "#000000",
       },
     });
-
-    // Hover cursor
-    map.on("mouseenter", "sector-layer", () => {
-      map.getCanvas().style.cursor = "pointer";
-    });
-    map.on("mouseleave", "sector-layer", () => {
-      map.getCanvas().style.cursor = "";
-    });
-
-    // Popup on click
-    map.on("click", "sector-layer", (e) => {
-      const props = e.features?.[0]?.properties || {};
-      if (!props) return;
-      const html = createPopupHtml(props);
-      if (window.currentPopup) window.currentPopup.remove();
-      window.currentPopup = new mapboxgl.Popup({ offset: 15 })
-        .setLngLat(e.lngLat)
-        .setHTML(html)
-        .addTo(map);
-    });
+  } else {
+    map.setPaintProperty("sector-layer", "fill-color", fillColorExpr);
   }
 
-  // --- Handle optional Band Overlay ---
+  // === Hover & popup handlers ===
+  map.off("mouseenter", "sector-layer");
+  map.off("mouseleave", "sector-layer");
+  map.off("click", "sector-layer");
+
+  map.on("mouseenter", "sector-layer", () => (map.getCanvas().style.cursor = "pointer"));
+  map.on("mouseleave", "sector-layer", () => (map.getCanvas().style.cursor = ""));
+
+  map.on("click", "sector-layer", (e) => {
+    if (!e.features || !e.features.length) return;
+    const feat = e.features[0];
+    const props = feat.properties || {};
+
+    // Restrict popup by band
+    if (selectedUniqueBands.length > 0) {
+      const bandsSet = new Set(
+        selectedUniqueBands.map((b) => String(b).toUpperCase().trim())
+      );
+      if (!bandsSet.has(String(props.band || "").toUpperCase().trim())) return;
+    }
+
+    // Restrict popup by column filters
+    if (selectedColumnFilters.length > 0) {
+      const pass = selectedColumnFilters.every(({ column, values }) => {
+        if (!column || !Array.isArray(values) || values.length === 0) return true;
+        const matchedKey = Object.keys(props).find(
+          (k) => k.toLowerCase() === column.toLowerCase()
+        );
+        if (!matchedKey) return false;
+        const val = String(props[matchedKey] || "").trim().toLowerCase();
+        const selectedVals = new Set(values.map((v) => String(v).trim().toLowerCase()));
+        return selectedVals.has(val);
+      });
+      if (!pass) return;
+    }
+
+    const html = createPopupHtml(props);
+    if (window.currentPopup) window.currentPopup.remove();
+    window.currentPopup = new mapboxgl.Popup({ offset: 15 })
+      .setLngLat(e.lngLat)
+      .setHTML(html)
+      .addTo(map);
+  });
+
+  // === Band overlay logic (unchanged) ===
   const haveSelection =
     (Array.isArray(selectedBandCells) && selectedBandCells.length > 0) ||
     (Object.keys(bandColorMap || {}).length > 0);
 
   if (haveSelection) {
     const selectedSet = new Set(
-      selectedBandCells.map(v => String(v).trim().toLowerCase())
+      selectedBandCells.map((v) => String(v).trim().toLowerCase())
     );
-    const bandColorKeys = Object.keys(bandColorMap).map(k => k.trim().toLowerCase());
+    const bandColorKeys = Object.keys(bandColorMap).map((k) =>
+      k.trim().toLowerCase()
+    );
 
-    // group selected features by (site_id, azimuth)
     const groups = new Map();
     features.forEach((f) => {
       const p = f.properties || {};
-      const cellname = (p.cellname || p.Cell_name || p.CELLNAME || "").toString();
-      const bandName = (p.band || p.Band || p.BAND || "").toString();
-
+      const cellname = (p.cellname || "").toString();
+      const bandName = (p.band || "").toString();
       const matches =
         selectedSet.has(cellname.toLowerCase()) ||
         selectedSet.has(bandName.toLowerCase()) ||
-        Array.from(selectedSet).some(sel => sel.includes(bandName.toLowerCase())) ||
         bandColorKeys.includes(bandName.toLowerCase()) ||
         bandColorKeys.includes(cellname.toLowerCase());
-
       if (!matches) return;
-
-      const siteId = (p.site_id || p.Site_ID || p.SITEID || "").toString();
-      const az = Number(p.azimuth || p.Azimuth || p.AZIMUTH || 0);
+      const siteId = (p.site_id || "").toString();
+      const az = Number(p.azimuth || 0);
       const key = `${siteId}::${az}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(f);
     });
 
-    // build concentric overlay features
     const overlayFeatures = [];
     const baseScale = 0.92;
-    const ringStep = 0.10;
+    const ringStep = 0.1;
     const minScale = 0.2;
 
     groups.forEach((arr) => {
-      arr.sort((a, b) => {
-        const pa = a.properties || {};
-        const pb = b.properties || {};
-        const ba = (pa.band || pa.Band || pa.BAND || "").toString();
-        const bb = (pb.band || pb.Band || pb.BAND || "").toString();
-        const byBand = ba.localeCompare(bb);
-        if (byBand !== 0) return byBand;
-        const ca = (pa.cellname || pa.Cell_name || pa.CELLNAME || "").toString();
-        const cb = (pb.cellname || pb.Cell_name || pb.CELLNAME || "").toString();
-        return ca.localeCompare(cb);
-      });
-
+      arr.sort((a, b) =>
+        (a.properties.band || "").toString().localeCompare(
+          (b.properties.band || "").toString()
+        )
+      );
       arr.forEach((f, idx) => {
         const p = f.properties || {};
-        const bandKey = (p.band || p.Band || p.BAND || "").toString();
-        const cellKey = (p.cellname || p.Cell_name || p.CELLNAME || "").toString();
-
+        const bandKey = (p.band || "").toString();
+        const cellKey = (p.cellname || "").toString();
         const color =
-          bandColorMap[bandKey] ||
-          bandColorMap[cellKey] ||
-          p.color ||
-          "#ff0000";
-
+          bandColorMap[bandKey] || bandColorMap[cellKey] || p.color || "#ff0000";
         const scaleFactor = Math.max(minScale, baseScale - idx * ringStep);
-
         let geom = f.geometry;
         try {
-          const scaled = turf.transformScale(f, scaleFactor, { origin: "centroid" });
-          geom = scaled.geometry;
-        } catch {
-          geom = f.geometry;
-        }
-
+          geom = turf.transformScale(f, scaleFactor, { origin: "centroid" }).geometry;
+        } catch {}
         overlayFeatures.push({
           type: "Feature",
           geometry: geom,
-          properties: {
-            ...p,
-            color,
-            outline: "#1f2937",
-          },
+          properties: { ...p, color, outline: "#1f2937" },
         });
       });
     });
 
-   
-
-    const overlayGeoJSON = {
-      type: "FeatureCollection",
-      features: overlayFeatures,
-    };
-
-    if (!map.getSource("band-sectors")) {
-      map.addSource("band-sectors", { type: "geojson", data: overlayGeoJSON });
-    } else {
+    const overlayGeoJSON = { type: "FeatureCollection", features: overlayFeatures };
+    if (map.getSource("band-sectors"))
       map.getSource("band-sectors").setData(overlayGeoJSON);
-    }
+    else map.addSource("band-sectors", { type: "geojson", data: overlayGeoJSON });
 
-    ["band-sectors-outline", "band-sectors"].forEach((id) => {
-      if (map.getLayer(id)) map.removeLayer(id);
+    if (map.getLayer("band-sectors")) map.removeLayer("band-sectors");
+    if (map.getLayer("band-sectors-outline")) map.removeLayer("band-sectors-outline");
+
+    map.addLayer({
+      id: "band-sectors",
+      type: "fill",
+      source: "band-sectors",
+      paint: { "fill-color": ["get", "color"], "fill-opacity": 0.85 },
     });
 
-    map.addLayer(
-      {
-        id: "band-sectors",
-        type: "fill",
-        source: "band-sectors",
-        paint: {
-          "fill-color": ["get", "color"],
-          "fill-opacity": 0.85,
-        },
+    map.addLayer({
+      id: "band-sectors-outline",
+      type: "line",
+      source: "band-sectors",
+      paint: {
+        "line-color": ["get", "outline"],
+        "line-width": 1.2,
+        "line-opacity": 0.9,
       },
-      "sector-layer"
-    );
-
-    map.addLayer(
-      {
-        id: "band-sectors-outline",
-        type: "line",
-        source: "band-sectors",
-        paint: {
-          "line-color": ["get", "outline"],
-          "line-width": 1.2,
-          "line-opacity": 0.9,
-        },
-      },
-      "band-sectors"
-    );
-
-    if (overlayFeatures.length > 0) {
-      try {
-        const bounds = turf.bbox(overlayGeoJSON);
-        map.fitBounds(bounds, { padding: 80, maxZoom: 16 });
-   
-      } catch (e) {
-        console.warn("Auto-zoom failed:", e);
-      }
-    }
-  } else {
-   
-    if (firstValidFeature) {
-      try {
-        const bounds = turf.bbox(firstValidFeature);
-        map.fitBounds(bounds, { padding: 80, maxZoom: 16 });
-      } catch (e) {
-        console.warn("Auto-zoom failed:", e);
-      }
-    }
-
-    if (map.getLayer("band-sectors-outline")) map.removeLayer("band-sectors-outline");
-    if (map.getLayer("band-sectors")) map.removeLayer("band-sectors");
-    if (map.getSource("band-sectors")) map.removeSource("band-sectors");
+    });
   }
+
+  console.log("🏁 addSectorLayer finished", {
+    totalAfterOverlay: features.length,
+    filters: {
+      bands: selectedUniqueBands,
+      columns: selectedColumnFilters,
+    },
+  });
 };
+
+
+
+
 
 
 
@@ -656,18 +984,18 @@ const addDriveTestLayer = () => {
   const map = mapInstance.current;
   if (!map || !driveTestGeoJSON?.features?.length) return;
 
-  // 🔄 Clear old layers/sources
+  
   if (map.getLayer("driveTest-points")) map.removeLayer("driveTest-points");
   if (map.getLayer("driveTest-heatmap")) map.removeLayer("driveTest-heatmap");
   if (map.getSource("drive-test")) map.removeSource("drive-test");
 
-  // ✅ Use actual selected KPI
+  
   const selectedKPI =
     selectedDriveKPI && colorRanges[selectedDriveKPI]
       ? selectedDriveKPI
       : Object.keys(colorRanges)[0] || "RSRP";
 
-  // Sort by time if available
+ 
   const sorted = [...driveTestGeoJSON.features].sort((a, b) => {
     const ta = a.properties.timestamp || a.properties.time || a.properties.date || 0;
     const tb = b.properties.timestamp || b.properties.time || b.properties.date || 0;
@@ -688,8 +1016,9 @@ const addDriveTestLayer = () => {
         type: "Feature",
         geometry: f.geometry,
         properties: {
+          
           ...f.properties,
-          __numericValue: value, // 👈 safe field for coloring
+          __numericValue: value, 
         },
       };
     }),
@@ -729,32 +1058,7 @@ const addDriveTestLayer = () => {
     },
   });
 
-  // 🔥 Optional Heatmap
-  map.addLayer({
-    id: "driveTest-heatmap",
-    type: "heatmap",
-    source: "drive-test",
-    maxzoom: 15,
-    paint: {
-      "heatmap-weight": [
-        "interpolate", ["linear"], ["to-number", ["get", "__numericValue"]],
-        layerRange.min ?? -120, 0,
-        layerRange.max ?? -60, 1
-      ],
-      "heatmap-intensity": 3.2,
-      "heatmap-radius": 30,
-      "heatmap-opacity": 0.6,
-      "heatmap-color": [
-        "interpolate", ["linear"], ["heatmap-density"],
-        0, "rgba(33,102,172,0)",
-        0.2, "rgb(103,169,207)",
-        0.4, "rgb(209,229,240)",
-        0.6, "rgb(253,219,199)",
-        0.8, "rgb(239,138,98)",
-        1, "rgb(178,24,43)"
-      ]
-    }
-  });
+
 
   // === ✅ Add hover popup for drive test points ===
   const popup = new mapboxgl.Popup({ closeButton: false, closeOnClick: false });
@@ -765,7 +1069,7 @@ const addDriveTestLayer = () => {
     const value = feature.properties[selectedKPI];
     if (value == null) return;
 
-    // Find matching range
+   
     let rangeLabel = "Uncategorized";
     if (colorRanges[selectedKPI]) {
       for (const [color, [min, max]] of Object.entries(colorRanges[selectedKPI])) {
@@ -795,169 +1099,56 @@ const addDriveTestLayer = () => {
 
 
 
-  // === Add Heatmap Layer ===
-  const addHeatmapLayer = (map, data, kpi, thresholdValue) => {
-    if (map.getLayer('kpi-heatmap')) map.removeLayer('kpi-heatmap');
-    if (map.getSource('kpi-heat')) map.removeSource('kpi-heat');
-    const features = (data?.features || []).filter(
-      f => typeof f.properties[kpi] === 'number'
-    );
-    const geojson = { type: 'FeatureCollection', features };
-    map.addSource('kpi-heat', { type: 'geojson', data: geojson });
-    map.addLayer({
-    id: "driveTest-heatmap",
-    type: "heatmap",
-    source: "drive-test",
-    maxzoom: 15,
-    paint: {
-      "heatmap-weight": [
-        "interpolate", ["linear"], ["to-number", ["get", selectedKPI]],
-        layerRange.min ?? -120, 0,
-        layerRange.max ?? -60, 1
-      ],
-      "heatmap-intensity": 1.2,
-      "heatmap-radius": 22,
-      "heatmap-opacity": 0.6,
-      "heatmap-color": [
-        "interpolate", ["linear"], ["heatmap-density"],
-        0, "rgba(33,102,172,0)",
-        0.2, "rgb(103,169,207)",
-        0.4, "rgb(209,229,240)",
-        0.6, "rgb(253,219,199)",
-        0.8, "rgb(239,138,98)",
-        1, "rgb(178,24,43)"
-      ]
-    }
-  });
-  };
 
-const addGridHeatmapLayer = () => {
-  const map = mapInstance.current;
-  if (!map || !gridHeatmapGeoJSON || !selectedKPI) return;
-
-  // 🔄 Remove old layer/source if exists
-  if (map.getLayer("grid-heatmap")) map.removeLayer("grid-heatmap");
-  if (map.getSource("grid-kpi")) map.removeSource("grid-kpi");
-
-  // ✅ Sanitize values
-  const sanitized = {
-    type: "FeatureCollection",
-    features: gridHeatmapGeoJSON.features.map(f => {
-      const raw = f.properties[selectedKPI];
-      const value = Number(raw);
-      return {
-        ...f,
-        properties: {
-          ...f.properties,
-          __value: isNaN(value) ? null : value
-        }
-      };
-    })
-  };
-
-  map.addSource("grid-kpi", { type: "geojson", data: sanitized });
-
-  // 🧠 Optional: threshold-based intensity
-  const minVal = Math.min(...sanitized.features.map(f => f.properties.__value ?? Infinity));
-  const maxVal = Math.max(...sanitized.features.map(f => f.properties.__value ?? -Infinity));
-
-  map.addLayer({
-    id: "grid-heatmap",
-    type: "heatmap",
-    source: "grid-kpi",
-    maxzoom: 15,
-    paint: {
-      "heatmap-weight": [
-        "interpolate",
-        ["linear"],
-        ["to-number", ["get", "__value"]],
-        minVal, 0,
-        threshold, 1 // 👈 threshold affects intensity
-      ],
-      "heatmap-intensity": 1,
-      "heatmap-radius": 20,
-      "heatmap-opacity": 0.7,
-      "heatmap-color": [
-        "interpolate", ["linear"], ["heatmap-density"],
-        0, "rgba(33,102,172,0)",
-        0.2, "rgb(103,169,207)",
-        0.4, "rgb(209,229,240)",
-        0.6, "rgb(253,219,199)",
-        0.8, "rgb(239,138,98)",
-        1, "rgb(178,24,43)"
-      ]
-    }
-  });
-};
+  
 
 
+// 🔄 Unified auto-refresh effect
+useEffect(() => {
+  if (!mapInstance.current) return;
+  if (!gridMapGeoJSON?.features?.length) return;
 
-  // === Add Grid Layer ===
-  const addGridLayer = (map, gridGeoJSON, threshold = 17, kpiField = 'kpi_avg') => {
-    if (!gridGeoJSON || !gridGeoJSON.features || gridGeoJSON.features.length === 0) return;
-    if (map.getLayer('grid-layer')) map.removeLayer('grid-layer');
-    if (map.getSource('grid')) map.removeSource('grid');
-    map.addSource('grid', { type: 'geojson', data: gridGeoJSON });
-    map.addLayer({
-      id: 'grid-layer',
-      type: 'fill',
-      source: 'grid',
-      paint: {
-        'fill-color': [
-          'case',
-          ['>=', ['get', kpiField], threshold], '#fee08b', // Yellow for SINR >= 17
-          [
-            'interpolate',
-            ['linear'],
-            ['get', kpiField],
-            0, '#d73027',    // Red (problematic)
-            threshold, '#fee08b', // Yellow (threshold)
-            30, '#1a9850'    // Green (good)
-          ]
-        ],
-        'fill-opacity': 0.7,
-        'fill-outline-color': '#222'
-      },
-    });
-    // Fit map to grid bounds
-    try {
-      const bounds = turf.bbox(gridGeoJSON);
-      map.fitBounds(bounds, { padding: 40, maxZoom: 15 });
-    } catch (err) {
-      // ignore
-    }
-    map.on('click', 'grid-layer', (e) => {
-      const props = e.features[0].properties;
-      const coordinates = e.lngLat;
-      new mapboxgl.Popup()
-        .setLngLat(coordinates)
-        .setHTML(`<div><b>Avg KPI:</b> ${props[kpiField] !== undefined ? props[kpiField] : 'N/A'}</div>`)
-        .addTo(map);
-    });
-    map.on('mouseenter', 'grid-layer', () => {
-      map.getCanvas().style.cursor = 'pointer';
-    });
-    map.on('mouseleave', 'grid-layer', () => {
-      map.getCanvas().style.cursor = '';
-    });
-    map.addLayer({
-  id: 'driveTest-heatmap',
-  type: 'heatmap',
-  source: 'driveTest',
-  paint: {
-    'heatmap-weight': ['get', selectedKPI],
-    'heatmap-intensity': 1,
-    'heatmap-radius': 20,
-    'heatmap-color': [
-      'interpolate', ['linear'], ['heatmap-density'],
-      0, 'blue',
-      0.5, 'yellow',
-      1, 'red'
-    ],
+  const kpi = selectedGridKPI;
+  const ranges = colorRanges?.[kpi];
+
+  
+
+  if (!kpi) {
+    
+    return;
   }
-});
 
-  };
+  if (!ranges || Object.keys(ranges).length === 0) {
+    
+    return;
+  }
+
+  
+  addGridMapLayer(kpi, ranges);
+}, [gridMapGeoJSON, selectedGridKPI, colorRanges]);
+
+
+
+
+
+
+
+
+
+
+// 🌐 Expose manual refresh
+// useEffect(() => {
+//   window.refreshGridLayer = () => {
+//     if (mapInstance.current) {
+//       addGridMapLayer();
+//     }
+//   };
+//   return () => {
+//     delete window.refreshGridLayer;
+//   };
+// }, [gridMapGeoJSON, selectedGridKPI, colorRanges]);
+
+  
 
   useEffect(() => {
   const map = mapInstance.current;
@@ -978,8 +1169,9 @@ const addGridHeatmapLayer = () => {
       container: mapRef.current,
       style: mapStyle,
       center: [78.9629, 20.5937],
-      zoom: 4,
+      zoom: 5,
     });
+  
     window._map = map;
     mapInstance.current = map;
     map.addControl(new mapboxgl.NavigationControl());
@@ -1105,7 +1297,7 @@ const addGridHeatmapLayer = () => {
       if (valid.length > 0) {
         const bounds = turf.bbox({ type: 'FeatureCollection', features: valid });
         mapInstance.current.fitBounds(bounds, { padding: 40, maxZoom: 15, essential: true });
-        setHasZoomedToSectors(true); // 🚀 Avoid future zooms
+        setHasZoomedToSectors(true); 
       }
     } catch (err) {
       // ignore
@@ -1119,7 +1311,7 @@ useEffect(() => {
   if (!mapInstance.current) return;
   const map = mapInstance.current;
 
-  if (!map.getLayer("driveTest-layer")) return; // ✅ ensure layer exists
+  if (!map.getLayer("driveTest-layer")) return; 
 
   const popup = new mapboxgl.Popup({
     closeButton: false,
@@ -1159,7 +1351,7 @@ useEffect(() => {
 
   const handleMouseLeave = () => popup.remove();
 
-  // ✅ enable feature-state querying
+ 
   map.on("mousemove", "driveTest-layer", handleMouseMove);
   map.on("mouseleave", "driveTest-layer", handleMouseLeave);
 
@@ -1171,84 +1363,89 @@ useEffect(() => {
 }, [selectedDriveKPI, colorRanges, driveTestGeoJSON]);
 
 
+
+
+
 // === Handle Grid Heatmap Upload ===
-const handleGridHeatmapUpload = async (file) => {
+const handleGridHeatmapUpload = async (file, cityLookup = {}) => {
   if (!file) return;
 
   const ext = file.name.split(".").pop().toLowerCase();
 
   try {
+    let geojson;
+
+    // --- Parse GeoJSON / JSON files ---
     if (ext === "geojson" || ext === "json") {
-      // ✅ Load GeoJSON/JSON directly
       const text = await file.text();
-      const geojson = JSON.parse(text);
-
-     
-
-      // extract KPI columns
-      const sampleProps = geojson.features?.[0]?.properties || {};
-      const kpis = Object.keys(sampleProps).filter(
-        (k) => typeof sampleProps[k] === "number"
-      );
-    
-      setAvailableGridKPIs(kpis);
-      setSelectedKPI(kpis[0] || null);
-
-      // put data on map
-      mapInstance.current.addSource("grid-heatmap", { type: "geojson", data: geojson });
+      geojson = JSON.parse(text);
     }
 
+    // --- Parse CSV files ---
     if (ext === "csv") {
-      // ✅ Parse CSV into GeoJSON
       const text = await file.text();
       const rows = text.split("\n").map((r) => r.split(","));
       const headers = rows[0];
       const latIdx = headers.findIndex((h) => h.toLowerCase().includes("lat"));
       const lonIdx = headers.findIndex((h) => h.toLowerCase().includes("lon"));
-      
+
       if (latIdx === -1 || lonIdx === -1) {
         alert("❌ CSV must contain latitude and longitude columns!");
         return;
       }
 
-      const features = rows.slice(1).filter(r => r.length > 1).map((r) => ({
-        type: "Feature",
-        geometry: {
-          type: "Point",
-          coordinates: [parseFloat(r[lonIdx]), parseFloat(r[latIdx])],
-        },
-        properties: headers.reduce((acc, h, i) => {
-          acc[h] = isNaN(r[i]) ? r[i] : Number(r[i]);
-          return acc;
-        }, {}),
-      }));
+      const features = rows.slice(1)
+        .filter((r) => r.length > 1)
+        .map((r) => ({
+          type: "Feature",
+          geometry: {
+            type: "Point",
+            coordinates: [parseFloat(r[lonIdx]), parseFloat(r[latIdx])],
+          },
+          properties: headers.reduce((acc, h, i) => {
+            acc[h] = isNaN(r[i]) ? r[i] : Number(r[i]);
+            return acc;
+          }, {}),
+        }));
 
-      const geojson = { type: "FeatureCollection", features };
+      geojson = { type: "FeatureCollection", features };
+    }
 
-      console.log("📂 Converted CSV to GeoJSON:", geojson);
+    // --- Ensure city is populated ---
+    geojson.features.forEach((feature) => {
+      const cell = feature.properties?.cellname || feature.properties?.Cell_name;
+      feature.properties.city =
+        feature.properties.city ||
+        cityLookup[cell] ||
+        "unknown"; // fallback to unknown
+    });
 
-      const sampleProps = features[0]?.properties || {};
-      const kpis = Object.keys(sampleProps).filter(
-        (k) => typeof sampleProps[k] === "number"
-      );
+    // --- Extract numeric KPIs ---
+    const sampleProps = geojson.features?.[0]?.properties || {};
+    const kpis = Object.keys(sampleProps).filter(
+      (k) => typeof sampleProps[k] === "number"
+    );
 
-      setAvailableGridKPIs(kpis);
-      setSelectedKPI(kpis[0] || null);
+    setAvailableGridKPIs(kpis);
+    setSelectedKPI(kpis[0] || null);
 
+    // --- Add or update GeoJSON source on the map ---
+    if (mapInstance.current.getSource("grid-heatmap")) {
+      mapInstance.current.getSource("grid-heatmap").setData(geojson);
+    } else {
       mapInstance.current.addSource("grid-heatmap", { type: "geojson", data: geojson });
     }
   } catch (err) {
-    console.error("❌ Upload failed:", err);
     alert("Upload failed: " + err.message);
   }
 };
 
 
-useEffect(() => {
-  if (showHeatmapPanel) {
-    addGridHeatmapLayer();
-  }
-}, [gridHeatmapGeoJSON, selectedKPI, threshold, showHeatmapPanel]);
+// useEffect(() => {
+//   if (showHeatmapPanel) {
+//     addGridHeatmapLayer();
+//   }
+// }, [gridHeatmapGeoJSON, selectedKPI, threshold, showHeatmapPanel]);
 
 
 
@@ -1258,10 +1455,94 @@ useEffect(() => {
     }
   }, [driveTestGeoJSON]);
 
+useEffect(() => {
+  if (mapInstance.current && geojsonData) {
+    // Use selectedUniqueBands from props, not local state
+    addSectorLayer(mapInstance.current, geojsonData, selectedBandCells, bandColorMap, (typeof selectedUniqueBands === 'undefined' ? [] : selectedUniqueBands));
+  }
+}, [mapInstance.current, geojsonData, selectedBandCells, bandColorMap, selectedUniqueBands]);
+
+  // 🌐 Expose global band filter
+useEffect(() => {
+  if (!mapInstance.current) return;
+
+  console.log("📝 Current selectedColumnValues:", selectedColumnValues);
+
+  // Normalize selectedColumnValues to an object first
+  const columnObj = Array.isArray(selectedColumnValues)
+    ? selectedColumnValues.reduce((acc, f) => {
+        if (f?.column && Array.isArray(f?.values)) acc[f.column] = f.values;
+        return acc;
+      }, {})
+    : selectedColumnValues || {};
+
+  // Convert to array of { column, values }
+  const columnFiltersArray = Object.entries(columnObj)
+    .filter(([_, values]) => Array.isArray(values) && values.length > 0)
+    .map(([column, values]) => ({ column, values }));
+
+  console.log("📤 Sending filters to map:", {
+    bands: selectedUniqueBands,
+    filters: columnFiltersArray,
+  });
+
+  const applyFilters = () => {
+    addSectorLayer(
+      mapInstance.current,
+      geojsonData,
+      [],                  // selectedBandCells
+      {},                  // bandColorMap
+      selectedUniqueBands, // selectedUniqueBands
+      columnFiltersArray,  // column filters (array of objects)
+       layerColumn = null,
+        colorRanges = {}          
+
+    );
+  };
+
+  // Expose a global function for manual band filtering
+  window.applyBandFilter = (bands) => {
+    addSectorLayer(
+      mapInstance.current,
+      geojsonData,
+      [],
+      {},
+      bands || selectedUniqueBands,
+      columnFiltersArray
+    );
+  };
+
+  applyFilters();
+
+  return () => {
+    delete window.applyBandFilter;
+  };
+}, [geojsonData, selectedUniqueBands, selectedColumnValues]);
+
+
+
+
+
+
 
   useEffect(() => {
   setHasZoomedToSectors(false);
 }, [geojsonData]);
+useEffect(() => {
+  if (!mapInstance.current) return;
+
+  const map = mapInstance.current;
+
+  if (!map.isStyleLoaded()) {
+   
+    map.once("style.load", () => {
+      addSectorLayer(map);
+    });
+  } else {
+    addSectorLayer(map);
+  }
+}, [geojsonData]);
+
 
 // === Update Drive Test Layer styling dynamically ===
 useEffect(() => {
@@ -1271,7 +1552,7 @@ useEffect(() => {
 
   const map = mapInstance.current;
 
-  // Build Mapbox expression dynamically
+
   const bands = Object.entries(colorRanges[selectedDriveKPI]);
   bands.sort(([, [minA]], [, [minB]]) => minA - minB);
 
@@ -1280,16 +1561,37 @@ useEffect(() => {
     expression.push(min, color);
   });
 
-  console.log("🎨 Applying Drive Test style:", expression);
+  
 
   map.setPaintProperty("driveTest-layer", "circle-color", expression);
 }, [selectedDriveKPI, colorRanges, driveLayerRange]);
+
+// === Update Sector Layer styling dynamically ===
+useEffect(() => {
+  if (!mapInstance.current) return;
+  if (!mapInstance.current.getLayer("sectors-layer")) return;
+  if (!layerColumn || !colorRanges[layerColumn]) return;
+
+  const map = mapInstance.current;
+
+  const bands = Object.entries(colorRanges[layerColumn]);
+  bands.sort(([, [minA]], [, [minB]]) => minA - minB);
+
+  const expression = ["step", ["get", layerColumn], "#cccccc"];
+  bands.forEach(([color, [min]]) => {
+    expression.push(min, color);
+  });
+
+  map.setPaintProperty("sectors-layer", "fill-color", expression);
+}, [layerColumn, colorRanges, layerRange]);
+
+
 
 
 
   useEffect(() => {
     if (mapInstance.current && geojsonData?.features?.length > 0 && selectedKPI) {
-      addHeatmapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
+      addGridMapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
     }
   }, [geojsonData, selectedKPI, threshold]);
 
@@ -1306,7 +1608,7 @@ useEffect(() => {
     });
   }
 
-  // Fly to feature if it exists
+
   if (highlightedFeature?.geometry?.coordinates) {
     map.flyTo({
       center: highlightedFeature.geometry.coordinates,
@@ -1317,12 +1619,6 @@ useEffect(() => {
 }, [highlightedFeature]);
 
 
-  // === Grid Layer Effect ===
-  useEffect(() => {
-    if (mapInstance.current && gridGeoJSON && gridGeoJSON.features?.length > 0) {
-      addGridLayer(mapInstance.current, gridGeoJSON, threshold, 'kpi_avg');
-    }
-  }, [gridGeoJSON, threshold]);
 
   // === Map Style toggles ===
   const handleStyleToggle = () => {
@@ -1341,9 +1637,9 @@ useEffect(() => {
         if (geojsonData) addSectorLayer(mapInstance.current, geojsonData);
         addDriveTestLayer();
         if (highlightedFeature) addHighlightLayer(mapInstance.current, highlightedFeature);
-        if (geojsonData && selectedKPI) addHeatmapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
+        if (geojsonData && selectedKPI) addGridMapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
         if (gridGeoJSON && gridGeoJSON.features?.length > 0)
-          addGridLayer(mapInstance.current, gridGeoJSON, threshold, 'kpi_avg');
+          addGridLayer(mapInstance.current, gridGeoJSON, threshold, 'average');
       });
     }
   };
@@ -1364,9 +1660,9 @@ useEffect(() => {
         if (geojsonData) addSectorLayer(mapInstance.current, geojsonData);
         addDriveTestLayer();
         if (highlightedFeature) addHighlightLayer(mapInstance.current, highlightedFeature);
-        if (geojsonData && selectedKPI) addHeatmapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
+        if (geojsonData && selectedKPI) addGridMapLayer(mapInstance.current, geojsonData, selectedKPI, threshold);
         if (gridGeoJSON && gridGeoJSON.features?.length > 0)
-          addGridLayer(mapInstance.current, gridGeoJSON, threshold, 'kpi_avg');
+          addGridLayer(mapInstance.current, gridGeoJSON, threshold, 'average');
       });
     }
   };
@@ -1384,7 +1680,7 @@ useEffect(() => {
       return;
     }
 
-    // Search by Site_ID, Cell_name, or any KPI property
+    
     const results = geojsonData.features.filter((f) => {
       const props = f.properties || {};
       return (
@@ -1409,12 +1705,12 @@ useEffect(() => {
   // === Undo Search (local only) ===
   const handleUndoSearch = () => {
   setSearchHistory((prev) => {
-    if (prev.length === 0) return prev; // nothing to undo
+    if (prev.length === 0) return prev;
 
-    // Remove the last search
+  
     const newHistory = prev.slice(0, -1);
 
-    // Update highlighted feature to the previous one or null
+  
     const previousFeature = newHistory.length > 0 ? newHistory[newHistory.length - 1] : null;
     setHighlightedFeature(previousFeature);
 
@@ -1425,11 +1721,11 @@ useEffect(() => {
   // === PLMN Layer (for whole network) ===
   useEffect(() => {
     if (!mapInstance.current || !geojsonData) return;
-    // Remove previous PLMN layer/source
+   
     if (mapInstance.current.getLayer('plmn-layer')) mapInstance.current.removeLayer('plmn-layer');
     if (mapInstance.current.getSource('plmn')) mapInstance.current.removeSource('plmn');
 
-    // Add PLMN layer (show all sites/cells)
+   
     mapInstance.current.addSource('plmn', {
       type: 'geojson',
       data: geojsonData
@@ -1451,10 +1747,10 @@ useEffect(() => {
 
   
 
-  // === Legend Dynamic Selection UI & Logic ===
-  const toggleLegend = () => setShowLegend((prev) => !prev);
+// === Legend Dynamic Selection UI & Logic ===
+const toggleLegend = () => setShowLegend((prev) => !prev);
 
-  // Dynamic legend rendering based on legendType
+// Dynamic legend rendering based on legendType
 const renderLegend = () => {
   // === Grid KPI (special case) ===
   if (gridGeoJSON && gridGeoJSON.features?.length > 0) {
@@ -1483,7 +1779,7 @@ const renderLegend = () => {
     case 'kpi':
       return (
         <>
-          <div className="legend-title">{colorColumn || 'Selected KPI'} Color Ranges</div>
+          <div className="legend-title">{'Selected KPI'} Color Ranges</div>
           <div className="legend-item">
             <span className="legend-color" style={{ backgroundColor: '#1a9850' }}></span>
             High Value
@@ -1516,33 +1812,22 @@ const renderLegend = () => {
         </>
       );
 
-case "driveTest":
-  console.log("Legend Debug (driveTest):", {
-    selectedDriveKPI,
-    ranges: colorRanges[selectedDriveKPI],
-  });
-
-  if (!selectedDriveKPI) {
-    return <div className="legend-title">⚠️ No Drive Test KPI selected</div>;
+    // Sector Colors (dynamic from layerColumn)
+    case 'sector':
+  if (!colorColumn) {
+    return <div className="legend-title">⚠️ No column selected</div>;
   }
-  if (!colorRanges[selectedDriveKPI]) {
-    return (
-      <div className="legend-title">
-        ⚠️ No color ranges defined for {selectedDriveKPI}
-      </div>
-    );
+  if (!colorRanges[colorColumn]) {
+    return <div className="legend-title">⚠️ No color bands defined for {colorColumn}</div>;
   }
-
   return (
     <>
-      <div className="legend-title">
-        Drive Test KPI: <strong>{selectedDriveKPI}</strong>
-      </div>
-      {Object.entries(colorRanges[selectedDriveKPI]).map(([color, [min, max]]) => (
+      <div className="legend-title">Sector Colors: {colorColumn}</div>
+      {Object.entries(colorRanges[colorColumn]).map(([color, [min, max]]) => (
         <div
           className="legend-item"
           key={color}
-          style={{ display: "flex", alignItems: "center", gap: "6px" }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
         >
           <span
             className="legend-color"
@@ -1550,7 +1835,7 @@ case "driveTest":
               backgroundColor: color,
               width: 16,
               height: 16,
-              border: "1px solid #ccc",
+              border: '1px solid #ccc',
               borderRadius: 4,
             }}
           />
@@ -1560,6 +1845,50 @@ case "driveTest":
     </>
   );
 
+    // Drive Test KPI
+    case 'driveTest':
+      console.log("Legend Debug (driveTest):", {
+        selectedDriveKPI,
+        ranges: colorRanges[selectedDriveKPI],
+      });
+
+      if (!selectedDriveKPI) {
+        return <div className="legend-title">⚠️ No Drive Test KPI selected</div>;
+      }
+      if (!colorRanges[selectedDriveKPI]) {
+        return (
+          <div className="legend-title">
+            ⚠️ No color ranges defined for {selectedDriveKPI}
+          </div>
+        );
+      }
+
+      return (
+        <>
+          <div className="legend-title">
+            Drive Test KPI: <strong>{selectedDriveKPI}</strong>
+          </div>
+          {Object.entries(colorRanges[selectedDriveKPI]).map(([color, [min, max]]) => (
+            <div
+              className="legend-item"
+              key={color}
+              style={{ display: "flex", alignItems: "center", gap: "6px" }}
+            >
+              <span
+                className="legend-color"
+                style={{
+                  backgroundColor: color,
+                  width: 16,
+                  height: 16,
+                  border: "1px solid #ccc",
+                  borderRadius: 4,
+                }}
+              />
+              <span>{min} – {max}</span>
+            </div>
+          ))}
+        </>
+      );
 
     default:
       return null;
@@ -1592,94 +1921,8 @@ case "driveTest":
           onClick={() => setShowSearchPanel((v) => !v)}
         >
           🔍
-        </button>
-                <button
-          className="icon-btn"
-          title="Toggle Heatmap Panel"
-          style={{
-            boxShadow: '0 2px 6px rgba(0,0,0,0.12)',
-            background: showHeatmapPanel ? '#e6f5ec' : '#fff',
-            fontSize: 15,
-            transition: 'background 0.2s',
-          }}
-          onClick={() => setShowHeatmapPanel((v) => !v)}
-        >
-          🔥
-        </button>
+        </button>     
       </div>
-
-      {/* Heatmap Controls */}
-{showHeatmapPanel && (
-  <div
-    className="kpi-controls"
-    style={{
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      background: "#fff",
-      padding: "2px 6px",
-      borderRadius: "6px",
-      boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
-    }}
-  >
-    {/* File Upload */}
-    <label className="kpi-label" style={{ fontSize: "13px", fontWeight: 500 }}>
-      Upload Grid KPI File:
-    </label>
-    <input
-      className="kpi-input"
-      type="file"
-      accept=".geojson,.json,.csv,.xml"
-      onChange={(e) => handleGridHeatmapUpload(e.target.files[0])}
-      style={{
-        fontSize: "12px",
-        maxWidth: "140px",
-        padding: "2px",
-        
-      }}
-      
-    />
-    
-
-{/* KPI Dropdown (shown only after upload) */}
-{availableGridKPIs?.length > 0 && (
-  <>
-    <label className="kpi-label">KPI:</label>
-    <select
-      className="kpi-select"
-      value={selectedKPI || ""}
-      onChange={(e) => setSelectedKPI(e.target.value)}
-    >
-      {availableGridKPIs.map((kpi) => (
-        <option key={kpi} value={kpi}>
-          {kpi}
-        </option>
-      ))}
-    </select>
-  </>
-)}
-
-
-    {/* Threshold Input */}
-    <label className="kpi-label" style={{ fontSize: "13px", fontWeight: 500 }}>
-      Threshold:
-    </label>
-    <input
-      className="kpi-input"
-      type="number"
-      value={threshold}
-      onChange={(e) => setThreshold(Number(e.target.value))}
-      style={{
-        width: "70px",
-        padding: "4px 6px",
-        fontSize: "13px",
-        border: "1px solid #ccc",
-        borderRadius: "4px",
-      }}
-    />
-  </div>
-)}
-
       {/* Search Bar */}
       {showSearchPanel && (
         <form

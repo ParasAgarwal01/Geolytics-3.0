@@ -4,6 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "homepage": "/geo",
+  
+
   "scripts": {
     "dev": "vite",
     "build": "vite build",

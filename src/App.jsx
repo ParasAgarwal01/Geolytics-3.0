@@ -9,13 +9,10 @@ import KPIGridUploader from "./components/KPIGridUploader";
 
 
 function normalizeBand(raw) {
-  if (!raw && raw !== 0) return '';
-  let s = String(raw).toUpperCase().trim();
-  s = s.replace(/\s+/g, '');
-  const m = s.match(/N?(\d{1,4})/);
-  if (!m) return s;
-  return 'N' + m[1];
+  if (!raw) return '';
+  return String(raw).toUpperCase().trim(); // ✅ only uppercase + trim, no regex
 }
+
 
 
 const App = () => {
@@ -31,12 +28,22 @@ const App = () => {
 
   const [selectedDriveKPI, setSelectedDriveKPI] = useState(null);
   const [gridData, setGridData] = useState(null);
+  const [gridKPIColumns, setGridKPIColumns] = useState([]);
+  const [selectedGridKPI, setSelectedGridKPI] = useState(null);
+  const [gridLayerRange, setGridLayerRange] = useState({ min: null, max: null });
+  
 
 
 
+const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null);
 
 
 
+const [radiusScale, setRadiusScale] = useState(1);
+const [selectedColumnValues, setSelectedColumnValues] = useState({});
+
+const [targetConfigs, setTargetConfigs] = useState([]);
+const [targetColorRanges, setTargetColorRanges] = useState({});
   const [selectedLayerColumn, setSelectedLayerColumn] = useState(null); 
   const [selectedBandColumn, setSelectedBandColumn] = useState(null);   
   const [selectedBandCell, setSelectedBandCell] = useState(null);
@@ -48,6 +55,8 @@ const App = () => {
   const [layerRange, setLayerRange] = useState({ min: null, max: null });
   const [driveLayerRange, setDriveLayerRange] = useState({ min: null, max: null }); // for Drive Test
   const [driveTestColumns, setDriveTestColumns] = useState([]);
+  // --- Unique Band Multi-Filter State ---
+  const [selectedUniqueBands, setSelectedUniqueBands] = useState([]);
 
   useEffect(() => {
   if (!selectedDriveKPI) return;
@@ -124,7 +133,7 @@ const handleSiteClick = (siteId, allFeatures) => {
 
 
 
-  // === PHDB Query Handler ===
+// === PHDB Query Handler ===
 const handleGenerateMap = async (payload) => {
   setLoading(true);
   try {
@@ -142,53 +151,26 @@ const handleGenerateMap = async (payload) => {
     if (!res.ok) throw new Error('Failed to fetch PHDB data');
     const data = await res.json();
 
-    console.log("✅ Fetched GeoJSON Sample:", data.features?.[0]?.properties);
+    
 
-    // Fallback to detect band from cellname if no column provided
-    const getBandFromCellname = (name) => {
-      if (!name) return 'default';
-      const match = name.match(/([LN]\d{2}[A-Z]?)/i); // e.g. L18, L21, N07C, N36A
-      return match ? match[0].toUpperCase() : 'default';
-    };
-
-    // Inject band into all features, preferring selectedBandColumn
     const parsedFeatures = data.features.map(f => {
       const props = f.properties || {};
-      const bandValue = selectedBandColumn && props[selectedBandColumn]
-        ? props[selectedBandColumn]
-        : props.BAND || props.band || props.Band || getBandFromCellname(props.cellname || props.Cell_name);
-
       return {
         ...f,
-        properties: {
-          ...props,
-          band: normalizeBand(bandValue) // ✅ Always normalize
-        }
+        properties: { ...props }, // already has band from backend
       };
     });
 
-    // Auto-load all bands for dropdown (no site click needed)
-    if (parsedFeatures && Array.isArray(parsedFeatures)) {
-      const opts = parsedFeatures.map(f => {
-        const props = f.properties || {};
-        const bandRaw = selectedBandColumn && props[selectedBandColumn]
-          ? props[selectedBandColumn]
-          : props.BAND || props.band || props.Band;
-        const band = normalizeBand(bandRaw);
-        const cellname = props.cellname || props.Cell_name || props.CELLNAME || '';
-        return { band, cellname };
-      });
+    // === Build options for dropdown (use backend bands if available) ===
+if (Array.isArray(data.bands) && data.bands.length > 0) {
+  const opts = data.bands.map(b => ({ band: b, cellname: null }));
+  setBandCellOptions(opts);
 
-      setBandCellOptions(
-        opts
-          .filter(o => o.band && o.cellname)
-          .sort((a, b) => {
-            const numA = parseInt(a.band.replace(/\D/g, ''), 10) || 0;
-            const numB = parseInt(b.band.replace(/\D/g, ''), 10) || 0;
-            return numB - numA;
-          })
-      );
-    }
+  
+} else {
+  
+}
+
 
     setGeojsonData({ ...data, features: parsedFeatures });
     setDriveTestGeoJSON(null);
@@ -300,6 +282,12 @@ const handleDriveTestUpload = async (file) => {
         onMouseLeave={() => setSidebarVisible(false)}
       >
 <Sidebar
+    selectedColumnValues={selectedColumnValues}
+  setSelectedColumnValues={setSelectedColumnValues}
+
+  onGridData={setGridMapGeoJSON}
+  gridMapGeoJSON={gridMapGeoJSON}
+  setGridMapGeoJSON={setGridMapGeoJSON}
   driveTestColumns={driveTestColumns}
   setDriveTestColumns={setDriveTestColumns}
   geoJsonData={geojsonData}
@@ -309,7 +297,6 @@ const handleDriveTestUpload = async (file) => {
   onExportData={onExportData}
   onDriveTestUpload={handleDriveTestUpload}
   onSearch={handleSidebarSearch}
-
   selectedLayerColumn={selectedLayerColumn}
   setSelectedLayerColumn={setSelectedLayerColumn}
   selectedBandColumn={selectedBandColumn}
@@ -320,16 +307,13 @@ const handleDriveTestUpload = async (file) => {
   setColorRanges={setColorRanges}
   colorBands={colorBands}
   bandColorBands={bandColorBands}
-
   bandCellOptions={bandCellOptions}
   setBandCellOptions={setBandCellOptions}
   selectedBandCell={selectedBandCell}
   setSelectedBandCell={setSelectedBandCell}
   setSelectedCellBand={setSelectedCellBand}
-
   siteCellOptions={siteCellOptions}
   setSiteCellOptions={setSiteCellOptions}
-  onGridData={setGridGeoJSON}
   layerRange={layerRange}
   setLayerRange={setLayerRange}
   driveLayerRange={driveLayerRange}
@@ -337,10 +321,19 @@ const handleDriveTestUpload = async (file) => {
   setGridData={setGridData}
   selectedDriveKPI={selectedDriveKPI}
   setSelectedDriveKPI={setSelectedDriveKPI}
-  
-  
-  
- 
+  gridKPIColumns={gridKPIColumns}
+  setGridKPIColumns={setGridKPIColumns}
+  selectedGridKPI={selectedGridKPI}
+  setSelectedGridKPI={setSelectedGridKPI}
+  gridLayerRange={gridLayerRange}
+  setGridLayerRange={setGridLayerRange}
+  onRadiusScaleChange={setRadiusScale}
+  selectedUniqueBands={selectedUniqueBands}
+  setSelectedUniqueBands={setSelectedUniqueBands}
+   targetColorRanges={targetColorRanges}
+  setTargetColorRanges={setTargetColorRanges}
+  targetConfigs={targetConfigs}
+  setTargetConfigs={setTargetConfigs}
 />
 
       </div>
@@ -348,31 +341,36 @@ const handleDriveTestUpload = async (file) => {
       {/* Map Display */}
       <div className="map-container">
         <MapRenderer
-  mapStyle={mapStyle}
-  geojsonData={geojsonData}
-  driveTestGeoJSON={driveTestGeoJSON}
-  highlightedFeature={highlightedFeature}
-  selectedKPI={selectedLayerColumn}
-  selectedBandColumn={selectedBandColumn}
-  legendType={legendType}
-  colorColumn={selectedLayerColumn}
-  colorBands={colorBands}
-  bandColorBands={bandColorBands} 
-  colorRanges={colorRanges}
-  selectedBandCell={selectedBandCell}
-  selectedCellBand={selectedCellBand}
-   gridGeoJSON={gridGeoJSON} 
-   selectedDriveKPI={selectedDriveKPI}
-   layerRange={layerRange}
-  onSiteClick={handleSiteClick}
-  driveLayerRange={driveLayerRange}
-  gridData={gridData}
-
-  
-   
-  
-
-   />
+          mapStyle={mapStyle}
+          geojsonData={geojsonData}
+          driveTestGeoJSON={driveTestGeoJSON}
+          highlightedFeature={highlightedFeature}
+          selectedKPI={selectedLayerColumn}
+          selectedBandColumn={selectedBandColumn}
+          legendType={legendType}
+          colorColumn={selectedLayerColumn}
+          colorBands={colorBands}
+          bandColorBands={bandColorBands}
+          colorRanges={colorRanges}
+          selectedBandCell={selectedBandCell}
+          selectedCellBand={selectedCellBand}
+          gridGeoJSON={gridGeoJSON}
+          selectedDriveKPI={selectedDriveKPI}
+          layerRange={layerRange}
+          onSiteClick={handleSiteClick}
+          driveLayerRange={driveLayerRange}
+          gridData={gridData}
+          layerColumn={selectedLayerColumn}
+          gridMapGeoJSON={gridMapGeoJSON}
+          selectedGridKPI={selectedGridKPI}
+          radiusScale={radiusScale}
+          selectedUniqueBands={selectedUniqueBands}
+          targetColorRanges={targetColorRanges}
+          targetConfigs={targetConfigs}
+          selectedColumnValues={Object.entries(selectedColumnValues).map(
+    ([column, values]) => ({ column, values })
+  )}
+        />
 
       </div>
 

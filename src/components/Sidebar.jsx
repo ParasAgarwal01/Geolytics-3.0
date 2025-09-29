@@ -26,14 +26,10 @@ const LEGEND_TYPES = [
   { value: 'driveTest', label: 'Drive Test KPI' }
 ];
 
-function normalizeBand(raw) {
-  if (!raw && raw !== 0) return '';
-  let s = String(raw).toUpperCase().trim();
-  s = s.replace(/\s+/g, '');
-  const m = s.match(/N?(\d{1,4})/);
-  if (!m) return s;
-  return 'N' + m[1];
-}
+
+
+
+
 
 
 function getColorForValue(value, colorBands) {
@@ -47,7 +43,7 @@ let missingColorKeysLogged = new Set();
 
 function generateSectorGeoJSON(features, colorColumn, colorBands) {
   if (!colorColumn || typeof colorColumn !== "string") {
-    console.warn("⛔ Skipping color logic. Invalid colorColumn:", colorColumn);
+    
     return []; // or just return features unchanged
   }
 
@@ -67,7 +63,7 @@ function generateSectorGeoJSON(features, colorColumn, colorBands) {
     if (isValidNumber) {
       f.properties.fillColor = getColorForValue(parsed, colorBands);
     } else {
-      console.warn(`⚠️ Invalid KPI value for ${colorColumn}. Got:`, rawVal, props);
+      
     }
 
     return f;
@@ -105,13 +101,21 @@ function getClosestColorName(hex) {
 }
 
 const Sidebar = ({ 
+
+  gridKPIColumns,
+  setGridKPIColumns,
+  selectedGridKPI,
+  setSelectedGridKPI,
+  gridLayerRange,
+  setGridLayerRange,
+
   driveLayerRange,
    setDriveLayerRange,
   // Data & map generation
   onGenerateMap,
   geoJsonData,
   onDriveTestUpload,
-  
+  onRadiusScaleChange,
   // Legend & KPI
   legendType,
   setLegendType,
@@ -136,9 +140,19 @@ const Sidebar = ({
    setGridData,
    selectedDriveKPI,
   setSelectedDriveKPI,
-  
+  selectedUniqueBands,
+  setSelectedUniqueBands,
+  selectedColumnValues,
+  setSelectedColumnValues
   
 }) => {
+
+const [targetRanges, setTargetRanges] = useState({});
+const [addingColorTarget, setAddingColorTarget] = useState({});
+const [newColorNameTarget, setNewColorNameTarget] = useState({});
+const [newColorHexTarget, setNewColorHexTarget] = useState({});
+const [newColorMinTarget, setNewColorMinTarget] = useState({});
+const [newColorMaxTarget, setNewColorMaxTarget] = useState({});
 
   // Table and column states
   const [tables, setTables] = useState([]);
@@ -154,17 +168,22 @@ const [isUniqueBandOpen, setIsUniqueBandOpen] = useState(false);
 
 const [uniqueBands, setUniqueBands] = useState([]);
 const [selectedBands, setSelectedBands] = useState([]);
-  
+const [radiusScale, setRadiusScale] = useState(1);
+
+const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null);
 
 
-
-
+const [filters, setFilters] = useState([]);
   const [searchTexts, setSearchTexts] = useState({});
   const [layerRange, setLayerRange] = useState({ min: null, max: null });
   const [newColorHex, setNewColorHex] = useState('#663399');
   const [newColorMin, setNewColorMin] = useState(layerRange.min || 0);
   const [newColorMax, setNewColorMax] = useState(layerRange.max || 0);
   const [bandRange, setBandRange] = useState({ min: null, max: null }); 
+  const [kpiSource, setKpiSource] = useState({ type: null, table: null });
+  const [searchBand, setSearchBand] = useState("");
+const [searchTerms, setSearchTerms] = useState({});
+
   
 
   // === Band dropdown UI state (UI only, doesn't change your data flow) ===
@@ -172,7 +191,7 @@ const [isBandDropdownOpen, setIsBandDropdownOpen] = useState(false);
 const [bandSearch, setBandSearch] = useState('');
 const bandDropdownRef = useRef(null);
 
-const [selectedUniqueBands, setSelectedUniqueBands] = useState([]);
+// selectedUniqueBands and setSelectedUniqueBands are now props from App.jsx
 
 
 const [addingDriveColor, setAddingDriveColor] = useState(false);
@@ -180,8 +199,21 @@ const [newDriveColorHex, setNewDriveColorHex] = useState("#0000ff");
 const [newDriveMin, setNewDriveMin] = useState(0);
 const [newDriveMax, setNewDriveMax] = useState(0);
 
-const [availableDriveKPIs, setAvailableDriveKPIs] = useState([]);
 
+const [addingGridColor, setAddingGridColor] = useState(false);
+const [newGridColorHex, setNewGridColorHex] = useState("#0000ff");
+const [newGridMin, setNewGridMin] = useState(0);
+const [newGridMax, setNewGridMax] = useState(0);
+
+
+
+const [availableDriveKPIs, setAvailableDriveKPIs] = useState([]);
+const [isFilterOpen, setIsFilterOpen] = useState(false);
+const [selectedColumnFilters, setSelectedColumnFilters] = useState(null); 
+const [availableColumns, setAvailableColumns] = useState([]);
+const [availableValues, setAvailableValues] = useState({}); 
+
+const [columnSearch, setColumnSearch] = useState("");
 
 
   // Filter config states
@@ -207,47 +239,77 @@ const [availableDriveKPIs, setAvailableDriveKPIs] = useState([]);
   const [kpiProgress, setKpiProgress] = useState(0);
 const [fetchingKPI, setFetchingKPI] = useState(false);
 
+const [fetchingGridKPI, setFetchingGridKPI] = useState(false);
+const [gridKpiProgress, setGridKpiProgress] = useState(0);
 
 
 
 
-  const handleGridHeatmapUpload = async (file) => {
-  if (!file) {
-    alert("⚠️ Please upload a grid KPI file.");
-    return;
-  }
+
+
+
+const handleGridMapFileChange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  // start loader
+  setFetchingGridKPI(true);
+  setGridKpiProgress(0);
+
+  // animate progress
+  const interval = setInterval(() => {
+    setGridKpiProgress((prev) => (prev < 90 ? prev + 5 : prev));
+  }, 120);
 
   const formData = new FormData();
   formData.append("file", file);
 
   try {
-    const res = await fetch(`${import.meta.env.VITE_API_URL}/upload-grid-kpi`, {
+    // 🔼 Upload to backend
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/upload-grid-map`, {
       method: "POST",
       body: formData,
     });
 
-    if (!res.ok) throw new Error("Upload failed");
-
-    const data = await res.json();
-    setGridHeatmapGeoJSON(data.geojson); // ✅ Store separately
-
-    // Optional: populate dropdown with KPIs
-    if (data.available_kpis?.length) {
-      // You can store them in a new state like:
-      setAvailableGridKPIs(data.available_kpis);
-      setSelectedKPI(data.available_kpis[0]);
+    if (!res.ok) {
+      throw new Error(`Grid map upload failed: ${res.statusText}`);
     }
 
+    const data = await res.json();
+
+    // ✅ Populate KPI dropdown
+    if (Array.isArray(data.available_kpis)) {
+      setGridKPIColumns(data.available_kpis);
+
+      // 🔑 mark KPI source as file
+      setKpiSource({ type: "file", table: null });
+    } else {
+      setGridKPIColumns([]);
+      setKpiSource({ type: null, table: null });
+    }
+
+    // ✅ Push GeoJSON to parent (App or MapRenderer)
+    if (data.geojson) {
+      onGridData?.(data.geojson);
+    }
   } catch (err) {
-    console.error("Grid KPI upload failed:", err);
-    alert("❌ Grid KPI upload failed.");
+    console.error("❌ Grid map upload failed:", err);
+    alert("Grid map upload failed. Please check the file format or backend logs.");
+  } finally {
+    clearInterval(interval);
+    setGridKpiProgress(100);
+    setTimeout(() => {
+      setFetchingGridKPI(false);
+      setGridKpiProgress(0);
+    }, 500);
   }
 };
 
- 
- 
-  
 
+
+  
+  
+const [localSelectedGridKPI, setLocalSelectedGridKPI] = React.useState(selectedGridKPI ?? null);
 const [addingColor, setAddingColor] = useState(false);
 const [newColorName, setNewColorName] = useState('');
 const bandSortOrder = (band) => {
@@ -255,6 +317,88 @@ const bandSortOrder = (band) => {
   return isNaN(numericPart) ? 0 : numericPart;
 };
 
+
+useEffect(() => {
+  if (kpiSource.type === "file") return;
+
+  const chosen =
+    Array.isArray(targetTables) && targetTables.length
+      ? targetTables[targetTables.length - 1] // most recent selection
+      : null;
+
+  if (!chosen) {
+    setGridKPIColumns([]);
+    setKpiSource({ type: null, table: null });
+    setGridMapGeoJSON(null);
+    return;
+  }
+
+  // ✅ One API call for both columns + geojson
+  fetch(
+    `${import.meta.env.VITE_API_URL}/grid-map/from-table?table=${encodeURIComponent(
+      chosen
+    )}`
+  )
+    .then((r) => r.json())
+    .then((data) => {
+      // Columns for KPI dropdown
+      if (Array.isArray(data.available_kpis)) {
+        setGridKPIColumns(data.available_kpis);
+      } else {
+        setGridKPIColumns([]);
+      }
+
+      // GeoJSON for heatmap
+      if (data?.geojson?.features?.length) {
+        setGridMapGeoJSON(data.geojson);
+        onGridData?.(data.geojson); // push to parent/map if needed
+      } else {
+        setGridMapGeoJSON(null);
+      }
+
+      setKpiSource({ type: "target", table: chosen });
+    })
+    .catch((err) => {
+      console.error("❌ Failed fetching grid map from target table:", err);
+      setGridKPIColumns([]);
+      setGridMapGeoJSON(null);
+      setKpiSource({ type: "target", table: chosen });
+    });
+}, [targetTables, kpiSource.type]);
+
+
+
+React.useEffect(() => {
+    if (localSelectedGridKPI && localSelectedGridKPI !== selectedGridKPI) {
+      
+      setSelectedGridKPI(localSelectedGridKPI);
+    }
+  }, [localSelectedGridKPI, selectedGridKPI, setSelectedGridKPI]);
+
+
+// === Fetch Band + Cellname options ===
+useEffect(() => {
+  if (!phdbTable) return;
+
+  fetch(`${import.meta.env.VITE_API_URL}/bands/${encodeURIComponent(phdbTable)}`)
+    .then(res => res.json())
+    .then(data => {
+      if (Array.isArray(data)) {
+        // expects array of { band: "1800", cellname: "Cell_A" }
+        setBandCellOptions(data);
+      } else {
+        setBandCellOptions([]);
+      }
+    })
+    .catch(err => {
+      console.error("❌ Failed fetching bands:", err);
+      setBandCellOptions([]);
+    });
+}, [phdbTable]);
+useEffect(() => {
+  window.selectedColumnValues = selectedColumnValues;
+  window.refreshLayerMap?.();  // re-render map whenever column filters change
+}, [selectedColumnValues]);
 
 useEffect(() => {
   const onDocClick = (e) => {
@@ -286,14 +430,14 @@ useEffect(() => {
   if (bandCellOptions && bandCellOptions.length > 0) {
     const bands = [...new Set(bandCellOptions.map(opt => opt.band))];
     setUniqueBands(bands);
-    console.log("Unique Bands:", bands);
+    
   }
 }, [bandCellOptions]);
 // Toggle dropdown
 const toggleUniqueBandDropdown = () => {
-  console.log("Toggle Unique Band Dropdown (before):", showUniqueBandDropdown);
+  
   setShowUniqueBandDropdown(prev => !prev);
-  console.log("Toggle Unique Band Dropdown (after):", !showUniqueBandDropdown);
+  
 };
 
 // Handle band selection
@@ -325,19 +469,6 @@ useEffect(() => {
   }
 }, [layerColumn]);
 
-
-
-
-// useEffect(() => {
-//   fetch(`${import.meta.env.VITE_API_URL}/drive-test/columns`)
-//     .then((res) => res.json())
-//     .then((data) => {
-//       if (data.columns) {
-//         setDriveTestColumns(data.columns); // ✅ store numeric KPIs
-//       }
-//     })
-//     .catch((err) => console.error("❌ Failed to fetch drive test columns:", err));
-// }, []);
 
 
   // Fetch tables and templates on mount
@@ -394,6 +525,8 @@ useEffect(() => {
     );
   });
 }, [targetTables]);
+
+
 
 
   useEffect(() => {
@@ -513,7 +646,7 @@ useEffect(() => {
             type="text"
             className="input search-input"
             placeholder="Search..."
-            value={searchText}
+            value={searchTexts[key] ?? ""}
             onChange={(e) =>
               setSearchTexts((prev) => ({ ...prev, [key]: e.target.value }))
             }
@@ -761,6 +894,7 @@ useEffect(() => {
   >
     <label>Target Table: {cfg.table}</label>
 
+    {/* === Target Columns === */}
     <label>Target Columns</label>
     {renderDropdown(
       `targetCols-${idx}`,
@@ -776,13 +910,14 @@ useEffect(() => {
       }
     )}
 
+    {/* === Join On Columns === */}
     <label>Join On Columns</label>
     <div className="join-wrapper" style={{ display: 'flex', gap: '10px' }}>
       <div style={{ flex: 1 }}>
         <label>{phdbTable}</label>
         {renderDropdown(
           `join-physical-${idx}`,
-          columns || [], // these are PHDB table columns
+          columns || [],
           false,
           cfg.joinOn?.physical || '',
           (val) => {
@@ -807,7 +942,7 @@ useEffect(() => {
         <label>{cfg.table}</label>
         {renderDropdown(
           `join-target-${idx}`,
-          cfg.columns || [], // these are target table columns
+          cfg.columns || [],
           false,
           cfg.joinOn?.target || '',
           (val) => {
@@ -826,6 +961,186 @@ useEffect(() => {
         )}
       </div>
     </div>
+
+    {/* === Color-Band for Selected Target Columns === */}
+    {cfg.selectedCols?.map((col) => {
+      const colKey = `${cfg.table}-${col}`;
+      return (
+        <div key={colKey} style={{ marginTop: '12px', border: '1px solid #eee', padding: '8px', borderRadius: '6px' }}>
+          <label>Coloring for: {col}</label>
+
+          {/* Fetch numeric range & set default colors */}
+          <button
+            style={{ marginLeft: '8px', fontSize: 12 }}
+            onClick={() => {
+              fetch(`${import.meta.env.VITE_API_URL}/column-range?table=${cfg.table}&column=${col}`)
+                .then((res) => res.json())
+                .then(({ min, max }) => {
+                  if (typeof min === 'number' && typeof max === 'number') {
+                    const step = (max - min) / 3;
+                    const defaultBands = {
+                      green: [min, min + step],
+                      yellow: [min + step, min + 2 * step],
+                      red: [min + 2 * step, max],
+                    };
+                    setColorRanges((prev) => ({
+                      ...prev,
+                      [colKey]: prev[colKey] || defaultBands,
+                    }));
+                    setTargetRanges((prev) => ({
+                      ...prev,
+                      [colKey]: { min, max },
+                    }));
+                  } else {
+                    setTargetRanges((prev) => ({ ...prev, [colKey]: { min: null, max: null } }));
+                  }
+                })
+                .finally(() => window.refreshLayerMap?.());
+            }}
+          >
+            Fetch Range & Default Colors
+          </button>
+
+          {/* Show range */}
+          {targetRanges[colKey] && targetRanges[colKey].min != null && targetRanges[colKey].max != null && (
+            <p>
+              Range: <strong>{col}</strong> {targetRanges[colKey].min} – {targetRanges[colKey].max}
+            </p>
+          )}
+
+          {/* Show color bands */}
+          {colorRanges[colKey] &&
+            Object.entries(colorRanges[colKey]).map(([color, [min, max]]) => (
+              <div key={color} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                <div
+                  style={{
+                    width: 16,
+                    height: 16,
+                    backgroundColor: color,
+                    borderRadius: 4,
+                    border: '1px solid #ccc',
+                  }}
+                />
+                <input
+                  type="number"
+                  value={min ?? ''}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setColorRanges((prev) => ({
+                      ...prev,
+                      [colKey]: {
+                        ...prev[colKey],
+                        [color]: [val, max],
+                      },
+                    }));
+                    window.refreshLayerMap?.();
+                  }}
+                  style={{ width: 70 }}
+                />
+                <input
+                  type="number"
+                  value={max ?? ''}
+                  onChange={(e) => {
+                    const val = Number(e.target.value);
+                    setColorRanges((prev) => ({
+                      ...prev,
+                      [colKey]: {
+                        ...prev[colKey],
+                        [color]: [min, val],
+                      },
+                    }));
+                    window.refreshLayerMap?.();
+                  }}
+                  style={{ width: 70 }}
+                />
+                <button
+                  style={{ fontSize: 12 }}
+                  onClick={() => {
+                    setColorRanges((prev) => {
+                      const updated = { ...prev[colKey] };
+                      delete updated[color];
+                      return { ...prev, [colKey]: updated };
+                    });
+                    window.refreshLayerMap?.();
+                  }}
+                >
+                  ❌
+                </button>
+              </div>
+            ))}
+
+          {/* Add new color band */}
+          {addingColorTarget[colKey] ? (
+            <div style={{ display: 'flex', gap: '8px', marginTop: 4, flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                placeholder="Color name (optional)"
+                value={newColorNameTarget[colKey] || ''}
+                onChange={(e) =>
+                  setNewColorNameTarget((prev) => ({ ...prev, [colKey]: e.target.value }))
+                }
+                style={{ width: 140 }}
+              />
+              <input
+                type="color"
+                value={newColorHexTarget[colKey] || '#ff0000'}
+                onChange={(e) =>
+                  setNewColorHexTarget((prev) => ({ ...prev, [colKey]: e.target.value }))
+                }
+              />
+              <input
+                type="number"
+                placeholder="Min"
+                value={newColorMinTarget[colKey] ?? targetRanges[colKey]?.min ?? 0}
+                onChange={(e) =>
+                  setNewColorMinTarget((prev) => ({ ...prev, [colKey]: Number(e.target.value) }))
+                }
+                style={{ width: 70 }}
+              />
+              <input
+                type="number"
+                placeholder="Max"
+                value={newColorMaxTarget[colKey] ?? targetRanges[colKey]?.max ?? 0}
+                onChange={(e) =>
+                  setNewColorMaxTarget((prev) => ({ ...prev, [colKey]: Number(e.target.value) }))
+                }
+                style={{ width: 70 }}
+              />
+              <button
+                onClick={() => {
+                  let name = (newColorNameTarget[colKey] || '').trim().toLowerCase();
+                  if (!name) name = getClosestColorName(newColorHexTarget[colKey]);
+                  if (colorRanges[colKey]?.[name]) return alert('Color already exists!');
+                  const min = newColorMinTarget[colKey];
+                  const max = newColorMaxTarget[colKey];
+                  if (min >= max) return alert('Min must be less than Max');
+                  setColorRanges((prev) => ({
+                    ...prev,
+                    [colKey]: { ...prev[colKey], [name]: [min, max] },
+                  }));
+                  setAddingColorTarget((prev) => ({ ...prev, [colKey]: false }));
+                  window.refreshLayerMap?.();
+                }}
+              >
+                ✅ Add
+              </button>
+              <button
+                onClick={() => setAddingColorTarget((prev) => ({ ...prev, [colKey]: false }))}
+              >
+                ❌ Cancel
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setAddingColorTarget((prev) => ({ ...prev, [colKey]: true }))}
+              style={{ marginTop: 4 }}
+            >
+              + Add Color Band
+            </button>
+          )}
+        </div>
+      );
+    })}
   </div>
 ))}
 
@@ -833,7 +1148,8 @@ useEffect(() => {
 <label>Select Column for Layer/Color</label>
 {renderDropdown('layer', columns, false, layerColumn, (selected) => {
   setLayerColumn(selected);
-  setSelectedLayerColumn(selected); 
+  // setSelectedLayerColumn(selected);
+
   fetch(`${import.meta.env.VITE_API_URL}/column-range?table=${phdbTable}&column=${selected}`)
     .then((res) => res.json())
     .then(({ min, max }) => {
@@ -845,7 +1161,6 @@ useEffect(() => {
           yellow: [min + step, min + 2 * step],
           red: [min + 2 * step, max],
         };
-
         setColorRanges((prev) => ({
           ...prev,
           [selected]: prev[selected] || defaultBands,
@@ -854,7 +1169,8 @@ useEffect(() => {
         setLayerRange({ min: null, max: null });
       }
     })
-    .catch(() => setLayerRange({ min: null, max: null }));
+    .catch(() => setLayerRange({ min: null, max: null }))
+    .finally(() => window.refreshLayerMap?.()); // refresh map & legend
 })}
 
 {layerColumn && layerRange.min != null && layerRange.max != null && (
@@ -884,44 +1200,53 @@ useEffect(() => {
             title={`Preview: ${color}`}
           />
         </label>
+
+        {/* Min */}
         <input
           type="number"
           className="input"
-          value={min}
-          onChange={(e) =>
+          value={min ?? ""} 
+          onChange={(e) => {
             setColorRanges((prev) => ({
               ...prev,
               [layerColumn]: {
                 ...prev[layerColumn],
                 [color]: [Number(e.target.value), max],
               },
-            }))
-          }
+            }));
+            window.refreshLayerMap?.();
+          }}
         />
+
+        {/* Max */}
         <input
           type="number"
           className="input"
-          value={max}
-          onChange={(e) =>
+          value={max ?? ""}
+          onChange={(e) => {
             setColorRanges((prev) => ({
               ...prev,
               [layerColumn]: {
                 ...prev[layerColumn],
                 [color]: [min, Number(e.target.value)],
               },
-            }))
-          }
+            }));
+            window.refreshLayerMap?.();
+          }}
         />
+
+        {/* Remove Band */}
         <button
           className="btn-remove"
           title="Remove color band"
-          onClick={() =>
+          onClick={() => {
             setColorRanges((prev) => {
               const updated = { ...prev[layerColumn] };
               delete updated[color];
               return { ...prev, [layerColumn]: updated };
-            })
-          }
+            });
+            window.refreshLayerMap?.();
+          }}
         >
           ❌
         </button>
@@ -956,21 +1281,21 @@ useEffect(() => {
         <input
           type="text"
           placeholder="Color name (optional)"
-          value={newColorName}
+          value={newColorName ?? ""}
           onChange={(e) => setNewColorName(e.target.value)}
           className="input"
           style={{ width: 140 }}
         />
         <input
           type="color"
-          value={newColorHex}
+          value={newColorHex ?? ""}
           onChange={(e) => setNewColorHex(e.target.value)}
           title="Pick color"
         />
         <input
           type="number"
           placeholder="Min"
-          value={newColorMin}
+          value={newColorMin ?? ""}
           onChange={(e) => setNewColorMin(Number(e.target.value))}
           className="input"
           style={{ width: 70 }}
@@ -978,7 +1303,7 @@ useEffect(() => {
         <input
           type="number"
           placeholder="Max"
-          value={newColorMax}
+          value={newColorMax ?? ""}
           onChange={(e) => setNewColorMax(Number(e.target.value))}
           className="input"
           style={{ width: 70 }}
@@ -1008,6 +1333,7 @@ useEffect(() => {
               },
             }));
             setAddingColor(false);
+            window.refreshLayerMap?.();
           }}
         >
           ✅ Add
@@ -1023,6 +1349,7 @@ useEffect(() => {
     )}
   </div>
 )}
+
 
 
                 
@@ -1060,7 +1387,7 @@ useEffect(() => {
       <input
         className="search-input"
         placeholder="Search..."
-        value={bandSearch}
+        value={bandSearch ?? ""}
         onChange={(e) => setBandSearch(e.target.value)}
       />
 
@@ -1213,356 +1540,850 @@ useEffect(() => {
   </div>
 )}
 
-{/* === Unique Band Multi-Filter === */}
+{/* === Filter Button (Band + Multi Column) === */}
 <div style={{ marginTop: "12px", position: "relative" }}>
-  
-
-  {/* Toggle Button */}
   <button
     type="button"
     className="btn-filter"
-    onClick={() => setIsUniqueBandOpen((prev) => !prev)}
+    onClick={async () => {
+      const newState = !isFilterOpen;
+      setIsFilterOpen(newState);
+
+      if (newState) {
+        if (filters.length === 0) {
+          setFilters([{ column: "", values: [] }]); // start with 1 filter row
+        }
+
+        try {
+          const res = await fetch(`${import.meta.env.VITE_API_URL}/columns/${phdbTable}`);
+          if (!res.ok) throw new Error("Failed to fetch columns");
+          const cols = await res.json();
+          setAvailableColumns(cols);
+        } catch (err) {
+          console.error("❌ Failed to fetch columns:", err);
+          setAvailableColumns([]);
+        }
+      }
+    }}
     style={{
       color: "#000",
-      display: "inline-block",
       marginTop: "6px",
-      padding: "1px 2px",
+      padding: "6px 14px",
       borderRadius: "20px",
       border: "1px solid #ccc",
       background: "#f9f9f9",
       cursor: "pointer",
+      fontWeight: "bold",
     }}
   >
-    {selectedUniqueBands?.length > 0
-      ? selectedUniqueBands.join(", ")
-      : "Filter"}
-    <span style={{ marginLeft: 8 }}>▾</span>
+    Filter ▾
   </button>
 
-  {/* Dropdown */}
-  {isUniqueBandOpen && (
+  {isFilterOpen && (
     <div
-      className="dropdown-list"
       style={{
+        color: "#000",
         position: "absolute",
         top: "100%",
         left: 0,
-        right: 0,
-        color: "#000",
-        marginTop: "4px",
+        width: "320px",
+        marginTop: "6px",
         border: "1px solid #ccc",
-        borderRadius: "6px",
+        borderRadius: "8px",
         background: "#fff",
-        maxHeight: "200px",
-        overflowY: "auto",
-        zIndex: 2000, 
+        padding: "12px",
+        zIndex: 2000,
       }}
     >
-      {Array.from(new Set((bandCellOptions || []).map((b) => b.band))) // unique bands
-        .sort((a, b) => {
-          const numA = parseInt(String(a || "").replace(/\D/g, ""), 10) || 0;
-          const numB = parseInt(String(b || "").replace(/\D/g, ""), 10) || 0;
-          return numB - numA; // descending order
-        })
-        .map((band) => {
-          const checked = selectedUniqueBands?.includes(band);
+      {/* === Band Multi-Select with Search === */}
+      <div style={{ marginBottom: "16px" }}>
+        <label style={{ fontWeight: "bold", color: "#000" }}>Filter by Band</label>
+        <input
+          type="text"
+          placeholder="Search band..."
+          value={searchBand || ""}
+          onChange={(e) => setSearchBand(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "6px",
+            marginTop: "6px",
+            marginBottom: "4px",
+            borderRadius: "4px",
+            border: "1px solid #ccc",
+          }}
+        />
+        <div
+          style={{
+            maxHeight: "150px",
+            overflowY: "auto",
+            border: "1px solid #ccc",
+            borderRadius: "6px",
+            padding: "4px",
+          }}
+        >
+          {Array.from(new Set((bandCellOptions || []).map((b) => b.band)))
+            .filter(Boolean)
+            .filter((band) => band.toLowerCase().includes((searchBand || "").toLowerCase()))
+            .sort((a, b) => {
+              const numA = parseInt(String(a || "").replace(/\D/g, ""), 10) || 0;
+              const numB = parseInt(String(b || "").replace(/\D/g, ""), 10) || 0;
+              return numB - numA;
+            })
+            .map((band) => {
+              const checked = selectedUniqueBands?.includes(band);
+              return (
+                <div
+                  key={band}
+                  style={{ display: "flex", alignItems: "center", cursor: "pointer", padding: "4px 0" }}
+                  onClick={() => {
+                    const newBands = checked
+                      ? selectedUniqueBands.filter((b) => b !== band)
+                      : [...(selectedUniqueBands || []), band];
+                    setSelectedUniqueBands(newBands);
+                    window.applyBandFilter?.(newBands);
+                  }}
+                >
+                  <input type="checkbox" checked={checked} readOnly />
+                  <span style={{ marginLeft: "6px" }}>{band}</span>
+                </div>
+              );
+            })}
+        </div>
+      </div>
 
-          return (
-            <div
-              key={band}
-              className="dropdown-item"
-              style={{
-                color: "#000",
-                padding: "6px 10px",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                borderBottom: "1px solid #eee",
-              }}
-              onClick={() => {
-                // toggle band selection
-                let newBands;
-                if (checked) {
-                  newBands = selectedUniqueBands.filter((b) => b !== band);
-                } else {
-                  newBands = [...(selectedUniqueBands || []), band];
+      {/* === Column Filters with Search === */}
+      {filters.map((filter, idx) => (
+        <div key={idx} style={{ marginBottom: "16px" }}>
+          {/* Column Dropdown */}
+          <select
+            value={filter.column || ""}
+            onChange={async (e) => {
+              const col = e.target.value;
+              if (!col) return;
+
+              if (!availableValues[col]) {
+                try {
+                  const res = await fetch(
+                    `${import.meta.env.VITE_API_URL}/distinct-values/${phdbTable}?col=${col}`
+                  );
+                  const vals = await res.json();
+                  setAvailableValues((prev) => ({ ...prev, [col]: vals }));
+                } catch (err) {
+                  console.error("❌ Failed to fetch values for column:", col, err);
                 }
+              }
 
-                setSelectedUniqueBands(newBands);
+              const updated = [...filters];
+              updated[idx] = { column: col, values: [] };
+              setFilters(updated);
 
-                // filter cells belonging to selected bands
-                const filteredCells = (bandCellOptions || [])
-                  .filter((c) => newBands.includes(c.band))
-                  .map((c) => c.cellname);
+              const newSelectedColumns = {};
+              updated.forEach((f) => {
+                if (f.column && f.values.length > 0) {
+                  newSelectedColumns[f.column] = f.values;
+                }
+              });
+              setSelectedColumnValues(newSelectedColumns);
+            }}
+            style={{ width: "100%", marginBottom: "6px", padding: "6px", borderRadius: "6px", border: "1px solid #ccc" }}
+          >
+            <option value="">Select a column</option>
+            {availableColumns.map((col) => (
+              <option key={col} value={col}>
+                {col}
+              </option>
+            ))}
+          </select>
 
-                setSelectedBandCell(filteredCells);
-                setSelectedCellBand(filteredCells);
-
-                
-              }}
-            >
+          {/* Values Multi-Select with Search */}
+          {filter.column && availableValues[filter.column] && (
+            <>
               <input
-                type="checkbox"
-                checked={checked}
-                readOnly
-                style={{ marginRight: "8px" }}
+                type="text"
+                placeholder={`Search ${filter.column}...`}
+                value={searchTerms[filter.column] || ""}
+                onChange={(e) =>
+                  setSearchTerms({ ...searchTerms, [filter.column]: e.target.value })
+                }
+                style={{
+                  width: "100%",
+                  padding: "6px",
+                  marginBottom: "4px",
+                  borderRadius: "4px",
+                  border: "1px solid #ccc",
+                }}
               />
-              {band}
-            </div>
-          );
-        })}
+              <div
+                style={{
+                  border: "1px solid #ccc",
+                  borderRadius: "6px",
+                  maxHeight: "120px",
+                  overflowY: "auto",
+                  padding: "4px",
+                }}
+              >
+                {availableValues[filter.column]
+                  .filter((val) =>
+                    val.toLowerCase().includes((searchTerms[filter.column] || "").toLowerCase())
+                  )
+                  .map((val) => {
+                    const checked = filter.values.includes(val);
+                    return (
+                      <div
+                        key={val}
+                        style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                        onClick={() => {
+                          const updated = [...filters];
+                          const newValues = checked
+                            ? filter.values.filter((v) => v !== val)
+                            : [...filter.values, val];
+                          updated[idx] = { ...filter, values: newValues };
+                          setFilters(updated);
+
+                          const newSelectedColumns = {};
+                          updated.forEach((f) => {
+                            if (f.column && f.values.length > 0) {
+                              newSelectedColumns[f.column] = f.values;
+                            }
+                          });
+                          setSelectedColumnValues(newSelectedColumns);
+                        }}
+                      >
+                        <input type="checkbox" checked={checked} readOnly />
+                        <span style={{ marginLeft: "6px" }}>{val}</span>
+                      </div>
+                    );
+                  })}
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+
+      {/* === Add Filter Row Button === */}
+      <button
+        type="button"
+        onClick={() => {
+          const updatedFilters = [...filters, { column: "", values: [] }];
+          setFilters(updatedFilters);
+
+          const newSelectedColumns = {};
+          updatedFilters.forEach((f) => {
+            if (f.column && f.values.length > 0) {
+              newSelectedColumns[f.column] = f.values;
+            }
+          });
+          setSelectedColumnValues(newSelectedColumns);
+        }}
+        style={{
+          color: "#000",
+          width: "30%",
+          padding: "6px",
+          borderRadius: "6px",
+          border: "1px dashed #ccc",
+          background: "#1e6e03ff",
+          cursor: "pointer",
+          fontWeight: "bold",
+          marginTop: "8px",
+        }}
+      >
+        + Add Filter
+      </button>
     </div>
   )}
 </div>
 
 
+{/* === Optional: Watch all filters for debugging === */}
+{/*
+useEffect(() => {
+  console.log("📊 Current filters array:", filters);
+}, [filters]);
+*/}
 
 
 
-return (
+
+
+ 
     <div>
-      {/* === Drive Test Upload === */}
-      <div className="form-section">
-  <label htmlFor="driveTestFile">📂 Upload Drive Test File</label>
+  {/* === Drive Test Upload === */}
+  <div className="form-section">
+    <label htmlFor="driveTestFile">📂 Upload Drive Test File</label>
+    <input
+      id="driveTestFile"
+      type="file"
+      accept=".csv,.xlsx,.xls,.geojson,.json"
+      onChange={handleDriveTestFileChange}
+      style={{ display: "block", marginTop: "6px" }}
+    />
+
+    {/* Progress Bar */}
+    {fetchingKPI && (
+      <div
+        style={{
+          height: "4px",
+          background: "#e0e0e0",
+          borderRadius: "2px",
+          marginTop: "4px",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            height: "100%",
+            width: `${kpiProgress}%`,
+            background: "#4caf50",
+            transition: "width 0.2s",
+          }}
+        />
+      </div>
+    )}
+  </div>
+
+  {/* === Drive Test KPI Selection === */}
+  <label>Select Drive Test KPI</label>
+  {renderDropdown(
+    "driveKPI",
+    driveTestColumns,
+    false,
+    selectedDriveKPI,
+    (selected) => {
+      setSelectedDriveKPI(selected);
+      setFetchingKPI(true);
+      setKpiProgress(0);
+
+      // Animate progress bar
+      const interval = setInterval(() => {
+        setKpiProgress((prev) => (prev < 95 ? prev + 5 : prev));
+      }, 100);
+
+      fetch(
+        `${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(
+          selected
+        )}`
+      )
+        .then((res) => res.json())
+        .then(({ min, max }) => {
+          if (typeof min === "number" && typeof max === "number") {
+            setDriveLayerRange({ min, max });
+
+            const step = (max - min) / 3;
+            const defaultBands = {
+              "#00ff00": [min, min + step],
+              "#ffff00": [min + step, min + 2 * step],
+              "#ff0000": [min + 2 * step, max],
+            };
+
+            setColorRanges((prev) => {
+              const newRanges = {
+                ...prev,
+                [selected]: prev[selected] || defaultBands,
+              };
+
+              // ✅ Immediately trigger drive test layer redraw
+              window.refreshDriveTestLayer?.(selected, newRanges[selected]);
+
+              return newRanges;
+            });
+          } else {
+            setDriveLayerRange({ min: null, max: null });
+          }
+        })
+        .catch((err) => {
+          console.error("❌ Failed fetching KPI range:", err);
+          setDriveLayerRange({ min: null, max: null });
+        })
+        .finally(() => {
+          clearInterval(interval);
+          setKpiProgress(100);
+          setTimeout(() => {
+            setFetchingKPI(false);
+            setKpiProgress(0);
+          }, 300);
+
+          // Still refresh visuals
+          window.refreshDriveTestLayer?.();
+        });
+    }
+  )}
+
+  {/* === Range Info === */}
+  {selectedDriveKPI &&
+    driveLayerRange.min != null &&
+    driveLayerRange.max != null && (
+      <p
+        className="range-info"
+        style={{ fontSize: "10px", fontWeight: "bold" }}
+      >
+        Range <strong>{selectedDriveKPI}</strong>:{" "}
+        <span>
+          {driveLayerRange.min} – {driveLayerRange.max}
+        </span>
+      </p>
+    )}
+
+  {/* === Dynamic Color Bands for Drive Test KPI === */}
+  {selectedDriveKPI && colorRanges[selectedDriveKPI] && (
+    <div className="color-range-wrapper">
+      {Object.entries(colorRanges[selectedDriveKPI]).map(
+        ([color, [min, max]]) => (
+          <div
+            key={color}
+            className="color-range-row"
+            style={{ marginBottom: "6px" }}
+          >
+            <label style={{ minWidth: 70, fontWeight: 500 }}>
+              {getColorLabel(color)}:
+            </label>
+
+            {/* Color Picker */}
+            <input
+              type="color"
+              value={color.startsWith("#") ? color : ""}
+              onChange={(e) => {
+                const newColor = e.target.value;
+                setColorRanges((prev) => {
+                  const bands = { ...prev[selectedDriveKPI] };
+                  bands[newColor] = bands[color];
+                  delete bands[color];
+                  return { ...prev, [selectedDriveKPI]: bands };
+                });
+                window.refreshDriveTestLayer?.();
+              }}
+              style={{ width: 24, height: 24, border: "none", marginRight: 8 }}
+            />
+
+            {/* Min */}
+            <input
+              type="number"
+              className="input"
+              style={{ width: 70 }}
+              value={min ?? ""}
+              onChange={(e) => {
+                setColorRanges((prev) => ({
+                  ...prev,
+                  [selectedDriveKPI]: {
+                    ...prev[selectedDriveKPI],
+                    [color]: [Number(e.target.value), max],
+                  },
+                }));
+                window.refreshDriveTestLayer?.();
+              }}
+            />
+
+            {/* Max */}
+            <input
+              type="number"
+              className="input"
+              style={{ width: 70 }}
+              value={max ?? ""}
+              onChange={(e) => {
+                setColorRanges((prev) => ({
+                  ...prev,
+                  [selectedDriveKPI]: {
+                    ...prev[selectedDriveKPI],
+                    [color]: [min, Number(e.target.value)],
+                  },
+                }));
+                window.refreshDriveTestLayer?.();
+              }}
+            />
+
+            {/* Remove Band */}
+            <button
+              className="btn-remove"
+              style={{ marginLeft: 6 }}
+              onClick={() => {
+                setColorRanges((prev) => {
+                  const updated = { ...prev[selectedDriveKPI] };
+                  delete updated[color];
+                  return { ...prev, [selectedDriveKPI]: updated };
+                });
+                window.refreshDriveTestLayer?.();
+              }}
+            >
+              ❌
+            </button>
+          </div>
+        )
+      )}
+
+      {/* === Add New Color Band === */}
+      {!addingDriveColor ? (
+        <button
+          className="btn-add"
+          style={{ marginTop: 8 }}
+          onClick={() => {
+            setAddingDriveColor(true);
+            setNewDriveColorHex("#0000ff");
+            setNewDriveMin(driveLayerRange.min ?? 0);
+            setNewDriveMax(driveLayerRange.max ?? 0);
+          }}
+        >
+          + Add Color Band
+        </button>
+      ) : (
+        <div
+          style={{
+            display: "flex",
+            gap: "8px",
+            alignItems: "center",
+            marginTop: 8,
+          }}
+        >
+          <input
+            type="color"
+            value={newDriveColorHex ?? ""}
+            onChange={(e) => setNewDriveColorHex(e.target.value)}
+            style={{ width: 32, height: 32, border: "none" }}
+          />
+          <input
+            type="number"
+            placeholder="Min"
+            value={newDriveMin ?? ""}
+            onChange={(e) => setNewDriveMin(Number(e.target.value))}
+            className="input"
+            style={{ width: 70 }}
+          />
+          <input
+            type="number"
+            placeholder="Max"
+            value={newDriveMax ?? ""}
+            onChange={(e) => setNewDriveMax(Number(e.target.value))}
+            className="input"
+            style={{ width: 70 }}
+          />
+          <button
+            className="btn-add"
+            onClick={() => {
+              if (colorRanges[selectedDriveKPI]?.[newDriveColorHex]) {
+                alert("Color already exists!");
+                return;
+              }
+              if (newDriveMin >= newDriveMax) {
+                alert("Min must be less than Max.");
+                return;
+              }
+              setColorRanges((prev) => ({
+                ...prev,
+                [selectedDriveKPI]: {
+                  ...prev[selectedDriveKPI],
+                  [newDriveColorHex]: [newDriveMin, newDriveMax],
+                },
+              }));
+              setAddingDriveColor(false);
+              window.refreshDriveTestLayer?.();
+            }}
+          >
+            ✅ Add
+          </button>
+          <button
+            className="btn-remove"
+            style={{ marginLeft: 6 }}
+            onClick={() => setAddingDriveColor(false)}
+          >
+            ❌
+          </button>
+        </div>
+      )}
+    </div>
+  )}
+</div>
+
+  
+
+{/* === Grid Map / Heatmap Upload === */}
+<div className="form-section">
+  <label htmlFor="gridMapFile">📂 Upload Grid Map File</label>
   <input
-    id="driveTestFile"
+    id="gridMapFile"
     type="file"
     accept=".csv,.xlsx,.xls,.geojson,.json"
-    onChange={handleDriveTestFileChange}
+    onChange={handleGridMapFileChange}
     style={{ display: "block", marginTop: "6px" }}
   />
-  
+
   {/* Progress Bar */}
-  {fetchingKPI && (
+  {fetchingGridKPI && (
     <div style={{
-      height: "4px",
-      background: "#e0e0e0",
-      borderRadius: "2px",
-      marginTop: "4px",
+      height: "6px",
+      background: "#ddd",
+      borderRadius: "3px",
+      marginTop: "6px",
       overflow: "hidden",
     }}>
       <div style={{
         height: "100%",
-        width: `${kpiProgress}%`,
-        background: "#4caf50",
-        transition: "width 0.2s",
+        width: `${gridKpiProgress}%`,
+        background: "linear-gradient(90deg, #4caf50, #81c784)",
+        transition: "width 0.15s ease-in-out",
       }} />
     </div>
   )}
 </div>
 
-      {/* === Drive Test KPI Selection === */}
-<label>Select Drive Test KPI</label>
+<label>Select KPI for Heatmap</label>
+{renderDropdown("gridKPI", gridKPIColumns, false, selectedGridKPI, async (selected) => {
+  setSelectedGridKPI(selected);
+  setSelectedLayerColumn(selected);
 
+  setFetchingGridKPI(true);
+  setGridKpiProgress(0);
 
-
-{renderDropdown("driveKPI", driveTestColumns, false, selectedDriveKPI, (selected) => {
-  setSelectedDriveKPI(selected);
-  setFetchingKPI(true);
-  setKpiProgress(0);
-
-  // Animate progress bar
   const interval = setInterval(() => {
-    setKpiProgress(prev => (prev < 95 ? prev + 5 : prev));
-  }, 100);
+    setGridKpiProgress(prev => (prev < 90 ? prev + 5 : prev));
+  }, 120);
 
-  fetch(`${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(selected)}`)
-    .then((res) => res.json())
-    .then(({ min, max }) => {
-      if (typeof min === "number" && typeof max === "number") {
-        setDriveLayerRange({ min, max });
-        const step = (max - min) / 3;
-        const defaultBands = {
-          "#00ff00": [min, min + step],
-          "#ffff00": [min + step, min + 2 * step],
-          "#ff0000": [min + 2 * step, max],
-        };
-        setColorRanges(prev => ({
-          ...prev,
-          [selected]: prev[selected] || defaultBands
-        }));
-      } else {
-        setDriveLayerRange({ min: null, max: null });
+  try {
+    let min, max;
+
+    if (kpiSource.type === "file") {
+      // ✅ Case 1: KPI comes from uploaded file
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/grid-map/column-range?column=${encodeURIComponent(selected)}&table=${phdbTable || ""}`
+      );
+      ({ min, max } = await res.json());
+    } else if (kpiSource.type === "target" && kpiSource.table) {
+      // ✅ Case 2: KPI comes from selected target table
+      // 1) Fetch range
+      const resRange = await fetch(
+        `${import.meta.env.VITE_API_URL}/grid-map/column-range?column=${encodeURIComponent(selected)}&table=${encodeURIComponent(kpiSource.table)}`
+      );
+      ({ min, max } = await resRange.json());
+
+      // 2) Fetch GeoJSON rows for this table
+      const resData = await fetch(
+        `${import.meta.env.VITE_API_URL}/grid-map/data?table=${encodeURIComponent(kpiSource.table)}`
+      );
+      const geojson = await resData.json();
+      if (geojson?.features) {
+        setGridMapGeoJSON(geojson);
+        onGridData?.(geojson);
       }
-    })
-    .catch((err) => {
-      console.error("❌ Failed fetching KPI range:", err);
-      setDriveLayerRange({ min: null, max: null });
-    })
-    .finally(() => {
-      clearInterval(interval);
-      setKpiProgress(100); // complete
-      setTimeout(() => {
-        setFetchingKPI(false);
-        setKpiProgress(0);
-      }, 300);
-      window.refreshDriveTestLayer?.();
-    });
+    }
+
+    // ✅ Same range logic as before
+    if (typeof min === "number" && typeof max === "number") {
+      setGridLayerRange({ min, max });
+
+      const step = (max - min) / 3;
+      const defaultBands = {
+        "#00ff00": [min, min + step],
+        "#ffff00": [min + step, min + 2 * step],
+        "#ff0000": [min + 2 * step, max],
+      };
+
+      setColorRanges(prev => {
+        const newRanges = {
+          ...prev,
+          [selected]: prev[selected] || defaultBands,
+        };
+        return newRanges;
+      });
+    } else {
+      setGridLayerRange({ min: null, max: null });
+    }
+  } catch (err) {
+    console.error("❌ Failed fetching Grid KPI range/data:", err);
+    setGridLayerRange({ min: null, max: null });
+  } finally {
+    clearInterval(interval);
+    setGridKpiProgress(100);
+    setTimeout(() => {
+      setFetchingGridKPI(false);
+      setGridKpiProgress(0);
+    }, 500);
+  }
 })}
 
+{/* === Show KPI Source Info === */}
+{(kpiSource.type === 'file' || kpiSource.type === 'target') && (
+  <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+    KPI source: {kpiSource.type === 'file' ? 'Uploaded file' : `Table: ${kpiSource.table}`}
+  </div>
+)}
 
-      {/* === Range Info === */}
-      {selectedDriveKPI && driveLayerRange.min != null && driveLayerRange.max != null && (
-        <p className="range-info" style={{ fontSize: "10px", fontWeight: "bold" }}>
-          Range <strong>{selectedDriveKPI}</strong>:{" "}
-          <span>
-            {driveLayerRange.min} – {driveLayerRange.max}
-          </span>
-        </p>
-      )}
+{/* === Range Info === */}
+{selectedGridKPI &&
+  gridLayerRange.min != null &&
+  gridLayerRange.max != null && (
+    <p className="range-info" style={{ fontSize: "10px", fontWeight: "bold" }}>
+      Range <strong>{selectedGridKPI}</strong>:{" "}
+      <span>
+        {gridLayerRange.min} – {gridLayerRange.max}
+      </span>
+    </p>
+  )}
 
-      {/* === Dynamic Color Bands for Drive Test KPI === */}
-      {selectedDriveKPI && colorRanges[selectedDriveKPI] && (
-        <div className="color-range-wrapper">
-          {Object.entries(colorRanges[selectedDriveKPI]).map(([color, [min, max]]) => (
-            <div key={color} className="color-range-row" style={{ marginBottom: "6px" }}>
-              <label style={{ minWidth: 70, fontWeight: 500 }}>{getColorLabel(color)}:</label>
+{/* === Dynamic Color Bands for Heatmap KPI === */}
+{selectedGridKPI && colorRanges[selectedGridKPI] && (
+  <div className="color-range-wrapper">
+    {Object.entries(colorRanges[selectedGridKPI]).map(([color, [min, max]]) => (
+      <div
+        key={color}
+        className="color-range-row"
+        style={{ marginBottom: "6px" }}
+      >
+        <label style={{ minWidth: 70, fontWeight: 500 }}>
+          {getColorLabel(color)}:
+        </label>
 
-              {/* Color Picker */}
-              <input
-                type="color"
-                value={color.startsWith("#") ? color : ""}
-                onChange={(e) => {
-                  const newColor = e.target.value;
-                  setColorRanges((prev) => {
-                    const bands = { ...prev[selectedDriveKPI] };
-                    bands[newColor] = bands[color];
-                    delete bands[color];
-                    return { ...prev, [selectedDriveKPI]: bands };
-                  });
-                  window.refreshDriveTestLayer?.();
-                }}
-                style={{ width: 24, height: 24, border: "none", marginRight: 8 }}
-              />
+        {/* Color Picker */}
+        <input
+          type="color"
+          value={color.startsWith("#") ? color : "#000000"}
+          onChange={(e) => {
+            const newColor = e.target.value;
+            
+            setColorRanges((prev) => {
+              const bands = { ...prev[selectedGridKPI] };
+              bands[newColor] = bands[color];
+              delete bands[color];
+              return { ...prev, [selectedGridKPI]: bands };
+            });
+            window.refreshGridLayer?.();
+          }}
+          style={{ width: 24, height: 24, border: "none", marginRight: 8 }}
+        />
 
-              {/* Min */}
-              <input
-                type="number"
-                className="input"
-                style={{ width: 70 }}
-                value={min}
-                onChange={(e) => {
-                  setColorRanges((prev) => ({
-                    ...prev,
-                    [selectedDriveKPI]: {
-                      ...prev[selectedDriveKPI],
-                      [color]: [Number(e.target.value), max],
-                    },
-                  }));
-                  window.refreshDriveTestLayer?.();
-                }}
-              />
+        {/* Min */}
+        <input
+          type="number"
+          className="input"
+          style={{ width: 70 }}
+          value={min ?? ""}
+          onChange={(e) => {
+            const newMin = Number(e.target.value);
+            setColorRanges((prev) => ({
+              ...prev,
+              [selectedGridKPI]: {
+                ...prev[selectedGridKPI],
+                [color]: [newMin, max],
+              },
+            }));
+            window.refreshGridLayer?.();
+          }}
+        />
 
-              {/* Max */}
-              <input
-                type="number"
-                className="input"
-                style={{ width: 70 }}
-                value={max}
-                onChange={(e) => {
-                  setColorRanges((prev) => ({
-                    ...prev,
-                    [selectedDriveKPI]: {
-                      ...prev[selectedDriveKPI],
-                      [color]: [min, Number(e.target.value)],
-                    },
-                  }));
-                  window.refreshDriveTestLayer?.();
-                }}
-              />
+        {/* Max */}
+        <input
+          type="number"
+          className="input"
+          style={{ width: 70 }}
+          value={max ?? ""}
+          onChange={(e) => {
+            const newMax = Number(e.target.value);
+            setColorRanges((prev) => ({
+              ...prev,
+              [selectedGridKPI]: {
+                ...prev[selectedGridKPI],
+                [color]: [min, newMax],
+              },
+            }));
+            window.refreshGridLayer?.();
+          }}
+        />
 
-              {/* Remove Band */}
-              <button
-                className="btn-remove"
-                style={{ marginLeft: 6 }}
-                onClick={() => {
-                  setColorRanges((prev) => {
-                    const updated = { ...prev[selectedDriveKPI] };
-                    delete updated[color];
-                    return { ...prev, [selectedDriveKPI]: updated };
-                  });
-                  window.refreshDriveTestLayer?.();
-                }}
-              >
-                ❌
-              </button>
-            </div>
-          ))}
+        {/* Remove Band */}
+        <button
+          className="btn-remove"
+          style={{ marginLeft: 6 }}
+          onClick={() => {
+            setColorRanges((prev) => {
+              const updated = { ...prev[selectedGridKPI] };
+              delete updated[color];
+              return { ...prev, [selectedGridKPI]: updated };
+            });
+            window.refreshGridLayer?.();
+          }}
+        >
+          ❌
+        </button>
+      </div>
+    ))}
 
-          {/* === Add New Color Band === */}
-          {!addingDriveColor ? (
-            <button
-              className="btn-add"
-              style={{ marginTop: 8 }}
-              onClick={() => {
-                setAddingDriveColor(true);
-                setNewDriveColorHex("#0000ff");
-                setNewDriveMin(driveLayerRange.min ?? 0);
-                setNewDriveMax(driveLayerRange.max ?? 0);
-              }}
-            >
-              + Add Color Band
-            </button>
-          ) : (
-            <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: 8 }}>
-              <input
-                type="color"
-                value={newDriveColorHex}
-                onChange={(e) => setNewDriveColorHex(e.target.value)}
-                style={{ width: 32, height: 32, border: "none" }}
-              />
-              <input
-                type="number"
-                placeholder="Min"
-                value={newDriveMin}
-                onChange={(e) => setNewDriveMin(Number(e.target.value))}
-                className="input"
-                style={{ width: 70 }}
-              />
-              <input
-                type="number"
-                placeholder="Max"
-                value={newDriveMax}
-                onChange={(e) => setNewDriveMax(Number(e.target.value))}
-                className="input"
-                style={{ width: 70 }}
-              />
-              <button
-                className="btn-add"
-                onClick={() => {
-                  if (colorRanges[selectedDriveKPI]?.[newDriveColorHex]) {
-                    alert("Color already exists!");
-                    return;
-                  }
-                  if (newDriveMin >= newDriveMax) {
-                    alert("Min must be less than Max.");
-                    return;
-                  }
-                  setColorRanges((prev) => ({
-                    ...prev,
-                    [selectedDriveKPI]: {
-                      ...prev[selectedDriveKPI],
-                      [newDriveColorHex]: [newDriveMin, newDriveMax],
-                    },
-                  }));
-                  setAddingDriveColor(false);
-                  window.refreshDriveTestLayer?.();
-                }}
-              >
-                ✅ Add
-              </button>
-              <button className="btn-remove" 
-              style={{ marginLeft: 6 }}
-              onClick={() => setAddingDriveColor(false)}
-              >
-                ❌ 
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
+    {/* === Add New Color Band === */}
+    {!addingGridColor ? (
+      <button
+        className="btn-add"
+        style={{ marginTop: 8 }}
+        onClick={() => {
+          setAddingGridColor(true);
+          setNewGridColorHex("#0000ff");
+          setNewGridMin(gridLayerRange.min ?? 0);
+          setNewGridMax(gridLayerRange.max ?? 0);
+        }}
+      >
+        + Add Color Band
+      </button>
+    ) : (
+      <div
+        style={{
+          display: "flex",
+          gap: "8px",
+          alignItems: "center",
+          marginTop: 8,
+        }}
+      >
+        <input
+          type="color"
+          value={newGridColorHex ?? "#0000ff"}
+          onChange={(e) => setNewGridColorHex(e.target.value)}
+          style={{ width: 32, height: 32, border: "none" }}
+        />
+        <input
+          type="number"
+          placeholder="Min"
+          value={newGridMin ?? ""}
+          onChange={(e) => setNewGridMin(Number(e.target.value))}
+          className="input"
+          style={{ width: 70 }}
+        />
+        <input
+          type="number"
+          placeholder="Max"
+          value={newGridMax ?? ""}
+          onChange={(e) => setNewGridMax(Number(e.target.value))}
+          className="input"
+          style={{ width: 70 }}
+        />
+        <button
+          className="btn-add"
+          onClick={() => {
+            if (colorRanges[selectedGridKPI]?.[newGridColorHex]) {
+              alert("Color already exists!");
+              return;
+            }
+            if (newGridMin >= newGridMax) {
+              alert("Min must be less than Max.");
+              return;
+            }
+            setColorRanges((prev) => ({
+              ...prev,
+              [selectedGridKPI]: {
+                ...prev[selectedGridKPI],
+                [newGridColorHex]: [newGridMin, newGridMax],
+              },
+            }));
+            setAddingGridColor(false);
+            window.refreshGridLayer?.();
+          }}
+        >
+          ✅ Add
+        </button>
+        <button
+          className="btn-remove"
+          style={{ marginLeft: 6 }}
+          onClick={() => setAddingGridColor(false)}
+        >
+          ❌
+        </button>
+      </div>
+    )}
+  </div>
+)}
+
 
 
 
@@ -1574,7 +2395,7 @@ return (
           type="text"
           className="input"
           placeholder="Template name"
-          value={templateName}
+          value={templateName ?? ""}
           onChange={(e) => setTemplateName(e.target.value)}
         />
         <button className="btn" onClick={handleSaveTemplate} disabled={!templateName}>
@@ -1595,6 +2416,26 @@ return (
           Generate Map
         </button>
       </div>
+      {/* === Sector Radius Scale === */}
+<div className="sidebar-section">
+  <label htmlFor="radiusScale">Sector Radius Scale</label>
+  <input
+    
+    id="radiusScale"
+    type="range"
+    min="0.05"
+    max="2"
+    step="0.1"
+    value={radiusScale}
+    onChange={(e) => {
+      const value = parseFloat(e.target.value);
+      setRadiusScale(value);
+      onRadiusScaleChange(value);
+    }}
+  />
+  <span>{radiusScale.toFixed(1)}x</span>
+</div>
+
     </div>
   );
 };
