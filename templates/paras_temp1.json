@@ -1,0 +1,17 @@
+{
+  "name": "Paras_temp1",
+  "config": {
+    "phdbTable": "TPG_PHDB_4G_5G",
+    "requiredCols": {
+      "site_id": "SITENAME",
+      "cellname": "CELLNAME",
+      "lat": "LATITUDE",
+      "lon": "LONGITUDE",
+      "azimuth": "AZIMUTH"
+    },
+    "popupColumns": [],
+    "target_joins": [],
+    "layerColumn": "BAND",
+    "bandColumn": ""
+  }
+}

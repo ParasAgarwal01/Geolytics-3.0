@@ -1,0 +1,27 @@
+{
+  "name": "paras_temp2",
+  "config": {
+    "phdbTable": "delta_cell_wk_5g",
+    "requiredCols": {
+      "site_id": "Pre ",
+      "cellname": "delta_back_to_normal",
+      "lat": "KPI Name",
+      "lon": "Pre ",
+      "azimuth": "Vendor"
+    },
+    "popupColumns": [
+      "Current"
+    ],
+    "targetTable": "delta_cell_wk_5g",
+    "targetColsSelected": [
+      "Current"
+    ],
+    "joinOn": {
+      "physical": "Vendor",
+      "target": "Current"
+    },
+    "layerColumn": "Vendor",
+    "bandColumn": "Current",
+    "kpiColumn": "Current"
+  }
+}

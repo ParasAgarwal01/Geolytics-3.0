@@ -1,0 +1,23 @@
+{
+  "name": "Paras_temp",
+  "config": {
+    "phdbTable": "",
+    "requiredCols": {
+      "site_id": "",
+      "cellname": "",
+      "lat": "",
+      "lon": "",
+      "azimuth": ""
+    },
+    "popupColumns": [],
+    "targetTable": "",
+    "targetColsSelected": [],
+    "joinOn": {
+      "physical": "",
+      "target": ""
+    },
+    "layerColumn": "",
+    "bandColumn": "",
+    "kpiColumn": ""
+  }
+}

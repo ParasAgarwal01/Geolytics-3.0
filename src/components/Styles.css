@@ -1,0 +1,954 @@
+/* === Navbar === */
+.geolytics-navbar {
+  background-color: #e6f5ec;
+  padding: 0 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: 'Segoe UI', sans-serif;
+  border-bottom: 1px solid #ccc;
+  width: 100%;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  height: 60px;
+  box-sizing: border-box;
+}
+
+.navbar-left {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.geolytics-logo {
+  font-size: 22px;
+  font-weight: bold;
+  color: #000;
+  text-decoration: underline;
+  letter-spacing: 0.5px;
+  padding-left: 12px;
+}
+
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Dropdown Button Styles */
+.dropdown-btn {
+  background: #a7e7c3;
+  border: 1px solid transparent;
+  padding: 6px 16px;
+  font-size: 15px;
+  font-weight: 500;
+  border-radius: 6px;
+  color: #000;
+  cursor: pointer;
+  transition: 0.2s ease-in-out;
+}
+
+.dropdown-btn.active {
+  background: #fff;
+  color: #000;
+  border: 1px solid #000;
+}
+
+/* Icon buttons (settings, profile, etc.) */
+.icon-btn {
+  background: #a7e7c3;
+  border: none;
+  font-size: 18px;
+  color: #000;
+  cursor: pointer;
+  padding: 6px 10px;
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+}
+
+/* Hover Effects */
+.dropdown-btn:hover,
+.icon-btn:hover {
+  background-color: #8fd8b4;
+}
+
+/* Responsive */
+@media (max-width: 900px) {
+  .geolytics-navbar {
+    padding: 0 8px;
+  }
+  .navbar-right {
+    gap: 8px;
+  }
+  .dropdown-btn,
+  .icon-btn {
+    font-size: 13px;
+    padding: 6px 8px;
+  }
+  .geolytics-logo {
+    font-size: 18px;
+    padding-right: 8px;
+  }
+}
+
+.dropdown-wrapper {
+  position: relative; 
+}
+
+
+
+
+/* === Layout === */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.main-layout {
+  display: flex;
+  flex: 1;
+  padding-top: 60px;
+}
+
+
+/* === Sidebar === */
+@media (max-height: 700px) {
+  .left-panel {
+    height: 100%;
+  }
+}
+
+.left-panel {
+  width: 320px !important;
+  background-color: #f9fafb;
+  border-right: 1px solid #ddd;
+  padding: 8px;
+  height: 100vh;
+  display: flex;              
+  flex-direction: column;     
+  box-sizing: border-box;
+  flex-shrink: 0;
+  font-size: 12px;
+  overflow: hidden auto;
+}
+
+
+.left-panel h3 {
+  margin-bottom: 8px;
+  color: #154734;
+  font-size: 14px;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 4px;
+}
+
+.left-panel label {
+  font-size: 12px;
+  font-weight: bold;
+  color: #000;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  display: block;
+}
+
+
+/* === Input Fields === */
+.input {
+  width: 99% !important;
+  padding: 4px;
+  margin-top: 2px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  background-color: #ccc;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  color: #000;
+}
+
+.input::placeholder {
+  color: #9b9898 !important;
+}
+
+
+/* === Buttons (Standard) === */
+.btn,
+.btn-primary {
+  width: 100%;
+  padding: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.btn {
+  background-color: #eee;
+  color: #333;
+}
+
+.btn:hover {
+  background-color: #ddd;
+}
+
+.btn-primary {
+  background-color: #1e7e65;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background-color: #155d4d;
+}
+
+
+/* === Map Panel === */
+.map-panel {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+
+.map-container {
+  /* width: 100%;
+  height: 100%; */
+  position: absolute;
+  top: 18px !important;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  transition: width 0.3s ease;
+}
+
+
+/* === Dropdowns === */
+.dropdown-list {
+  color: #000;
+  background-color: white;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  max-height: 100px;
+  overflow-y: auto;
+  margin-top: 2px;
+  position: absolute;
+  z-index: 10001 !important; 
+  width: 290px !important;
+  font-size: 12px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+  pointer-events: auto !important;
+}
+
+
+.dropdown-list::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+.dropdown-item {
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.dropdown-item:hover,
+.dropdown-item.selected {
+  background-color: #d6f5e3;
+}
+
+
+/* === Sidebar scroll and bottom === */
+.sidebar-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 16px 8px 80px; 
+  scrollbar-width: none;
+  box-sizing: border-box;
+  -ms-overflow-style: none; 
+}
+
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 0px;
+  background: transparent;
+}
+
+.sidebar-bottom {
+  position: sticky;
+  bottom: 0;
+  background-color: #f9fafb;
+  padding: 10px 8px;
+  border-top: 1px solid #ccc;
+  z-index: 5;
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.03);
+  
+}
+
+
+
+
+/* === Responsive === */
+@media (max-width: 768px) {
+  .navbar-right {
+    gap: 8px;
+  }
+
+  .dropdown-btn,
+  .icon-btn,
+  .btn-primary {
+    font-size: 13px;
+    padding: 6px 8px;
+  }
+}
+
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 42px;
+  height: 22px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 22px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px; width: 16px;
+  left: 3px; bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.switch input:checked + .slider {
+  background-color: #4caf50;
+}
+
+.switch input:checked + .slider:before {
+  transform: translateX(20px);
+}
+
+.slider.round {
+  border-radius: 22px;
+}
+
+/* === New Clean Buttons === */
+.btn-clean {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #1e7e65;
+  background-color: #d9f5e6;
+  color: #155d4d;
+  width: 100%;
+  margin-bottom: 8px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.btn-clean:hover {
+  background-color: #c2e9d8;
+}
+
+/* === Secondary buttons like CSV/KML === */
+.btn-outline {
+  background: #fff;
+  color: #1e7e65;
+  border: 1px solid #1e7e65;
+  padding: 4px 10px;
+  font-size: 12px;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+/* Hide scrollbars but keep scrolling */
+.hide-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari */
+}
+
+.btn-outline:hover {
+  background-color: #f0faf5;
+}
+
+/* === For bottom section layout === */
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.input-template {
+  padding: 6px;
+  font-size: 12px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.range-info{
+  color: #000;
+  padding: 6px !important;
+  font-size: 12px;
+  width: 100%;
+}
+.color-range-wrapper {
+  margin-top: 8px;
+  padding-left: 8px;
+}
+
+.color-range-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+
+.color-range-row label {
+  min-width: 60px;
+  font-weight: 500;
+  color: #333;
+}
+
+.color-range-row .input {
+  flex: 1;
+  max-width: 70px;
+}
+
+
+
+.export-generate-section {
+  margin-top: 16px;
+}
+
+.green-divider {
+  height: 1px;
+  background-color: #1e7e65;
+  margin: 12px 0;
+  border-radius: 2px;
+}
+
+.btn-generate {
+  background-color: #1e7e65;
+  color: white;
+  padding: 8px 12px;
+  width: 100%;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.btn-generate:hover {
+  background-color: #155d4d;
+}
+
+
+.mapboxgl-popup-content {
+  color: #000;
+  font-family: 'Segoe UI', sans-serif;
+  padding: 100px;
+  border-radius: 2px;
+  background: white;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.15);
+  max-width: 400px;
+  max-height: 300px; 
+  overflow: auto;     
+  scrollbar-width: none;     
+  -ms-overflow-style: none;  
+}
+
+.mapboxgl-popup-content::-webkit-scrollbar {
+  width: 0px;               
+  background: transparent;
+}
+
+.popup-table-bordered table {
+  width: 100%;
+  table-layout: fixed;         
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.popup-table-bordered th,
+.popup-table-bordered td {
+  border: 1px solid #ccc;
+  padding: 6px 10px;
+  text-align: left;
+  word-wrap: break-word;        
+  white-space: normal;          
+}
+
+
+.popup-table-bordered th {
+  background-color: #f2f2f2;
+  font-weight: 600;
+  color: #333;
+}
+
+.popup-table-bordered tr:nth-child(even) {
+  background-color: #fafafa;
+}
+
+
+/* Also ensure the tip (pointer) is visible and white */
+.mapboxgl-popup-tip {
+  border-top-color: rgb(254, 252, 252) !important;
+}
+
+
+
+
+
+
+/* Hot zone on the far-left for hover detection */
+.sidebar-hover-zone {
+  position: fixed;
+  top: 60px; /* Start below navbar */
+  left: 0;
+  height: calc(100vh - 60px); /* Just like sidebar */
+  width: 20px;
+  z-index: 9999;
+}
+
+/* Sidebar styling */
+.sidebar {
+  position: fixed;
+  top: 36px; 
+  left: 0;
+  height: calc(100vh - 36px);
+  width: 323px;
+  background-color: #f5f5f5;
+  box-shadow: 2px 0 5px rgba(0, 0, 0, 0.1);
+  transform: translateX(-100%);
+  transition: transform 0.3s ease-in-out;
+  z-index: 9998; 
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+
+/* When visible */
+.sidebar.show {
+  transform: translateX(0);
+}
+
+/* Adjust map container to fill full screen */
+.map-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  transition: width 0.3s ease;
+}
+
+
+.style-toggle-btn {
+  position: absolute;
+  top: 132px;
+  right: 10px;
+  z-index: 10000;
+  background-color: #f1f2f2;
+  color: white;
+  border: none;
+  padding: 0px 2px;
+  border-radius: 6px;
+  font-size: 18px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.style-toggle-btn:hover {
+  background-color: #389f8a;
+}
+
+
+.map-loader-spinner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  border: 4px solid rgba(30, 126, 101, 0.2); 
+  border-top: 4px solid #1e7e65;             
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  z-index: 12000;
+  transform: translate(-50%, -50%);
+}
+
+@keyframes spin {
+  0%   { transform: translate(-50%, -50%) rotate(0deg); }
+  100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+
+
+
+/* .map-legend {
+  position: absolute;
+  bottom: 20px;
+  left: 20px;
+  background: rgba(255, 255, 255, 0.85);
+  padding: 10px 14px;
+  border-radius: 8px;
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.2);
+  font-family: 'Segoe UI', sans-serif;
+  font-size: 13px;
+  z-index: 10;
+}
+
+.legend-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.legend-color {
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  border-radius: 3px;
+  border: 1px solid #ccc;
+} */
+
+
+
+.legend-toggle-btn {
+  right: 10px;
+  top: 218px !important;
+  position: absolute;
+  z-index: 50 !important;
+  padding: 3px 3px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: 4px;
+  box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.map-legend-popup {
+  color: #000;
+  position: absolute;
+  bottom: 10px;
+  right: 10px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  padding: 10px 14px; /* You can reduce if too tight */
+  max-width: 240px;
+  z-index: 1000;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  font-size: 13px;
+  line-height: 1.4;
+  overflow-wrap: break-word; /* Ensure long KPI column names wrap */
+}
+
+.map-legend-popup .legend-title {
+  color: #000;
+  font-weight: bold;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.map-legend-popup .legend-item {
+  display: flex;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.map-legend-popup .legend-color {
+  width: 16px;
+  height: 16px;
+  display: inline-block;
+  margin-right: 8px;
+  border: 1px solid #aaa;
+  border-radius: 2px;
+}
+.legend-toggle-btn:hover {
+  background-color:#389f8a;
+}
+
+.ruler-toggle-btn {
+  position: absolute;
+  top: 188px !important; 
+  right: 7px;
+  z-index: 1;
+  background-color: #fafbff;
+  color: #ffffff;
+  border: 1px;
+  border-radius: 4px;
+  padding: 0px 0px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.2s ease;
+}
+
+.ruler-toggle-btn:hover {
+  background-color: #389f8a;
+}
+
+/* === Distance Display Tag on Line Midpoint === */
+.distance-popup {
+   top: 170px !important;
+  background: #1e293b;
+  color: #f1f5f9;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid #64748b;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.distance-container {
+  position: absolute;
+  top: 170px !important;
+  right: 20px;
+  z-index: 1;
+}
+
+.distance-container > * {
+  background-color: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  margin: 0;
+  padding: 5px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+
+.ruler-toggle-btn.active {
+  background-color: #f2f3f5;
+  color: white;
+  border: 2px solid #111827;
+}
+
+
+/* ...existing code... */
+.kpi-controls {
+  position: absolute;
+  top: 17px;
+  left: 720px;
+  z-index: 11;
+  background: #fff;
+  padding: 2px 2px;
+  border-radius: 8px;
+  border: 1px;
+  box-shadow: 0 1px 5px rgba(28, 69, 50, 0.08);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 38px;
+}
+
+.kpi-label {
+  color: #1c4532;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.kpi-select, .kpi-input {
+  color: #1c4532;
+  font-size: 13px;
+  border-radius: 4px;
+  padding: 4px 8px;
+  border: 1px solid #1c4532;
+  background: #fff;
+  transition: border 0.2s;
+}
+
+.kpi-select:focus, .kpi-input:focus {
+  outline: none;
+  border: 1.5px solid #389f8a;
+}
+
+.kpi-input {
+  width: 80px;
+}
+
+
+
+
+
+.kpi-search-toggle-btn {
+  top: 160px !important;
+  position: absolute;
+  z-index: 50 !important;
+  padding: 3px 3px;
+  background: #ffffff;
+  border: 1px solid #ccc;
+  cursor: pointer;
+  font-size: 16px;
+  border-radius: 4px;
+  box-shadow: 0px 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+
+
+/* === Drive Test Upload === */
+.form-section {
+  margin-bottom: 20px;
+  padding: 0px 0px;
+  background-color: #f8f9fa00;
+  border: 1px solid #dddddd00;
+  border-radius: 8px;
+}
+
+.form-section label {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: #333;
+}
+
+.form-section input[type="file"] {
+  color:#000;
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 12px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  background-color: #fff;
+  font-size: 13px;
+}
+
+.form-section select.input-template {
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #ccc;
+  background-color: #ffffff;
+  font-size: 13px;
+  color: #333;
+  margin-bottom: 12px;
+}
+
+.dropdown-group {
+  margin-bottom: 10px;
+}
+
+
+.search-input {
+  margin: 4px;
+  padding: 6px;
+  width: 95%;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
+.dropdown-item.disabled {
+  color: #aaa;
+  pointer-events: none;
+}
+
+
+.color-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.color-range-row label {
+  width: 70px;
+}
+
+.color-range-row input {
+  width: 80px;
+}
+
+.color-range-row .btn-remove {
+  background: transparent;
+  border: none;
+  color: #f43f5e; /* Tailwind rose-500 */
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.color-range-wrapper .btn-add {
+  margin-top: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 1px solid #16a34a; /* Tailwind green-600 */
+  background: white;
+  color: #16a34a;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* HTML: <div class="loader"></div> */
+/* LOADER */
+.loader {
+  width: 60px;
+  aspect-ratio: 1;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.loader:before,
+.loader:after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  inset: 0;
+  background:
+    radial-gradient(circle 10px, #fb7602 94%, #0000),
+    repeating-conic-gradient(from -30deg, #0000 0 60deg, #11b71c 61deg 120deg);
+  -webkit-mask: radial-gradient(circle 15px, #000 calc(100% - 6px), #0000 calc(100% - 5px) 94%, #000);
+  mask: radial-gradient(circle 15px, #000 calc(100% - 6px), #0000 calc(100% - 5px) 94%, #000);
+}
+
+.loader:after {
+  animation: l4 1s infinite;
+  transform: perspective(300px) translateZ(0px);
+}
+
+@keyframes l4 {
+  to {
+    transform: perspective(300px) translateZ(150px);
+    opacity: 0;
+  }
+}
+
+.progress-text {
+  color: #0b0b0b;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  position: fixed;
+  top: calc(50% + 50px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Poppins', sans-serif;
+}

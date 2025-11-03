@@ -1,0 +1,11 @@
+.map-panel {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.map-container {
+  
+  width: 175%;
+  height: 100%;
+}

@@ -1,0 +1,27 @@
+{
+  "name": "Paras_temp4",
+  "config": {
+    "phdbTable": "PHDB_5GPRB_20250317",
+    "requiredCols": {
+      "site_id": "Site_ID",
+      "cellname": "Cell_name",
+      "lat": "Lat",
+      "lon": "Long",
+      "azimuth": "Azimuth"
+    },
+    "popupColumns": [
+      "CELL_AVG_UL_RIP_SCHED_PRB130__M55360C00130_"
+    ],
+    "targetTable": "5GUL_AllData_PHDB_20250617",
+    "targetColsSelected": [
+      "CELL_AVG_UL_RIP_SCHED_PRB206__M55360C00206_"
+    ],
+    "joinOn": {
+      "physical": "CELL_AVG_UL_RIP_SCHED_PRB162__M55360C00162_",
+      "target": "CELL_AVG_UL_RIP_SCHED_PRB162__M55360C00162_"
+    },
+    "layerColumn": "CELL_AVG_UL_RIP_SCHED_PRB162__M55360C00162_",
+    "bandColumn": "",
+    "kpiColumn": "CELL_AVG_UL_RIP_SCHED_PRB245__M55360C00245_"
+  }
+}

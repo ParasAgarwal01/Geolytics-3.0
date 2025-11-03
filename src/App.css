@@ -1,0 +1,87 @@
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: 'Segoe UI', sans-serif;
+}
+
+
+/* App Layout */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.main-layout {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.left-panel {
+  width: 320px;
+  background-color: #f9fafb;
+  border-right: 1px solid #ddd;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+/* Map Area */
+.map-panel {
+  flex: 1;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+}
+
+.map-container {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+}
+
+
+/* Navbar */
+.geolytics-navbar {
+  background-color: #e6f5ec;
+  padding: 12px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #ccc;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.geolytics-logo {
+  font-size: 20px;
+  font-weight: bold;
+  color: #154734;
+  text-decoration: none;
+}
+
+.navbar-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.dropdown-btn,
+.icon-btn {
+  background: #50e682;
+  border: none;
+  padding: 6px 12px;
+  font-size: 14px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.dropdown-btn:hover,
+.icon-btn:hover {
+  background-color: #3bc770;
+}
