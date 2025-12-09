@@ -1,31 +1,70 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from "react";
 
 const Navbar = ({
-  activeSubModule = 'TPGA02',
-  setActiveSubModule = () => {},
-  modules = ['GeoLytics', 'Vizbot', 'Automation Studio', 'PM Tool'],
+  activeSubModule,
+  setActiveSubModule,
+  selectedProject,
+  setSelectedProject,
 }) => {
   const [showSubModuleMenu, setShowSubModuleMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [subModulePosition, setSubModulePosition] = useState('down');
+  const [subModulePosition, setSubModulePosition] = useState("down");
+  const [dbList, setDbList] = useState([]);
 
   const subModuleBtnRef = useRef(null);
   const subModuleMenuRef = useRef(null);
 
+  // 🔹 Fetch all databases from backend
   useEffect(() => {
-    if (showSubModuleMenu && subModuleBtnRef.current && subModuleMenuRef.current) {
+    const fetchDatabases = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/databases`);
+        if (!res.ok) throw new Error("Failed to fetch databases");
+        const data = await res.json();
+        console.log("📡 Databases fetched:", data);
+        setDbList(data);
+      } catch (err) {
+        console.error("❌ Failed to load databases:", err);
+        setDbList([]);
+      }
+    };
+
+    fetchDatabases();
+  }, []);
+
+  // 🔹 Handle dropdown position dynamically (up/down)
+  useEffect(() => {
+    if (
+      showSubModuleMenu &&
+      subModuleBtnRef.current &&
+      subModuleMenuRef.current
+    ) {
       const btnRect = subModuleBtnRef.current.getBoundingClientRect();
       const dropdownHeight = subModuleMenuRef.current.offsetHeight;
       const spaceBelow = window.innerHeight - btnRect.bottom;
       const spaceAbove = btnRect.top;
-
-      if (spaceBelow < dropdownHeight && spaceAbove > dropdownHeight) {
-        setSubModulePosition('up');
-      } else {
-        setSubModulePosition('down');
-      }
+      setSubModulePosition(
+        spaceBelow < dropdownHeight && spaceAbove > dropdownHeight
+          ? "up"
+          : "down",
+      );
     }
   }, [showSubModuleMenu]);
+
+  // 🔹 Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (
+        subModuleMenuRef.current &&
+        !subModuleMenuRef.current.contains(event.target) &&
+        !subModuleBtnRef.current.contains(event.target)
+      ) {
+        setShowSubModuleMenu(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   return (
     <>
@@ -57,7 +96,7 @@ const Navbar = ({
         .navbar-right {
           display: flex;
           align-items: center;
-          gap: 8px;x
+          gap: 8px;
           position: relative;
         }
 
@@ -74,6 +113,11 @@ const Navbar = ({
           align-items: center;
         }
 
+        .dropdown-btn.active {
+          background-color: #4ade80 !important; /* ✅ Highlight active DB */
+          font-weight: 600;
+        }
+
         .dropdown-btn:hover, .icon-btn:hover {
           background-color: #86efac;
         }
@@ -87,6 +131,14 @@ const Navbar = ({
           box-shadow: 0 2px 6px rgba(0,0,0,0.1);
           font-size: 12px;
           min-width: 120px;
+          max-height: 200px;
+          overflow-y: auto;
+          -ms-overflow-style: none; /* IE and Edge */
+          scrollbar-width: none; /* Firefox */
+        }
+          .dropdown-content::-webkit-scrollbar {
+          width: 0;
+          height: 0;
         }
 
         .dropdown-content button {
@@ -113,12 +165,9 @@ const Navbar = ({
           margin-top: 6px;
         }
 
-        .icon-btn span {
-          margin-left: 2px;
-        }
-          .profile-btn {
+        .profile-btn {
           background-color: #dcfce7;
-          border: 1px #000;
+          border: 1px solid #000;
           border-radius: 4px;
           padding: 2px 8px;
           font-size: 11px;
@@ -128,65 +177,79 @@ const Navbar = ({
           display: flex;
           align-items: center;
         }
-
       `}</style>
 
       <nav className="geolytics-navbar">
+        {/* Left Section */}
         <div className="navbar-left">
           <span className="profile-btn" title="Toggle Sidebar">
             <span>≡</span>
           </span>
-          <a className="geolytics-logo" href="/">Geolytics</a>
+          <a className="geolytics-logo" href="/">
+            Geolytics
+          </a>
         </div>
 
+        {/* Right Section */}
         <div className="navbar-right">
-          {/* Module dropdown - placeholder static */}
-          <button className="dropdown-btn">
-            Module — GeoLytics <span>▾</span>
-          </button>
+          {/* Static Main Module */}
+          <button className="dropdown-btn">Module — GeoLytics</button>
 
-          {/* Submodule dropdown */}
-          <div style={{ position: 'relative' }}>
+          {/* Dynamic Database Dropdown */}
+          <div style={{ position: "relative" }}>
             <button
               ref={subModuleBtnRef}
               className="dropdown-btn"
-              onClick={() => setShowSubModuleMenu(prev => !prev)}
+              onClick={() => setShowSubModuleMenu((prev) => !prev)}
             >
-              {activeSubModule} <span>▾</span>
+              {selectedProject || "Select DB"} <span>▾</span>
             </button>
+
             {showSubModuleMenu && (
               <div
                 ref={subModuleMenuRef}
-                className={`dropdown-content ${subModulePosition === 'up' ? 'drop-up' : 'drop-down'}`}
+                className={`dropdown-content ${
+                  subModulePosition === "up" ? "drop-up" : "drop-down"
+                }`}
               >
-                {['TPGA01', 'TPGA02', 'TPGA03'].map(sub => (
-                  <button
-                    key={sub}
-                    onClick={() => {
-                      setActiveSubModule(sub);
-                      setShowSubModuleMenu(false);
-                    }}
-                  >
-                    {sub}
-                  </button>
-                ))}
+                {dbList.length > 0 ? (
+                  dbList.map((db) => (
+                    <button
+                      key={db}
+                      className={
+                        db === selectedProject
+                          ? "dropdown-btn active"
+                          : "dropdown-btn"
+                      }
+                      onClick={() => {
+                        setActiveSubModule(db);
+                        setSelectedProject(db);
+                        setShowSubModuleMenu(false);
+                      }}
+                    >
+                      {db}
+                    </button>
+                  ))
+                ) : (
+                  <button disabled>Loading...</button>
+                )}
               </div>
             )}
           </div>
 
           {/* Settings */}
           <button className="profile-btn" title="Settings">
-            <span>⚙️</span>
+            ⚙️
           </button>
 
-          {/* Profile dropdown - text-based 👤 icon */}
-          <div style={{ position: 'relative' }}>
+          {/* Profile Dropdown */}
+          <div style={{ position: "relative" }}>
             <button
               className="profile-btn"
-              onClick={() => setShowProfileMenu(prev => !prev)}
+              onClick={() => setShowProfileMenu((prev) => !prev)}
               title="Profile"
             >
-              <span role="img" aria-label="Profile">👤</span> <span>▾</span>
+              👤 <span>▾</span>
             </button>
             {showProfileMenu && (
               <div className="dropdown-content drop-down" style={{ right: 0 }}>

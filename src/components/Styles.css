@@ -222,6 +222,31 @@
   transition: width 0.3s ease;
 }
 
+/* === Compact Mapbox Navigation Controls === */
+.mapboxgl-ctrl.mapboxgl-ctrl-group {
+  transform: scale(0.9); /* adjust size: 0.5 = 50%, 0.7 = 70% */
+  transform-origin: top right;
+  transform-origin: 1px !important;
+}
+
+/* Optional: Reduce spacing */
+.mapboxgl-ctrl.mapboxgl-ctrl-group button {
+  
+  width: 32px !important;  /* default 30px */
+  height: 26px !important;
+  padding: 0 !important;
+}
+
+/* Optional: make icons thinner & cleaner */
+.mapboxgl-ctrl-icon {
+  background-size: 90% !important;  /* icon smaller inside the button */
+}
+/* Move Mapbox controls slightly downward */
+.mapboxgl-ctrl-top-right {
+  top: 13px !important;   /* default ~ 0–20px */
+  right: 1px !important; /* adjust if needed */
+}
+
 
 /* === Dropdowns === */
 .dropdown-list {
@@ -254,6 +279,120 @@
 .dropdown-item:hover,
 .dropdown-item.selected {
   background-color: #d6f5e3;
+}
+/* ===== Material You style toggle ===== */
+.md-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.md-toggle-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Track */
+.md-toggle-track {
+  width: 44px;
+  height: 22px;
+  border-radius: 999px;
+  padding: 4px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+
+  background: radial-gradient(circle at 0% 0%, #10c768, #e5e7eb);
+  box-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.05),
+    0 6px 12px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+
+  transition:
+    background 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+/* Thumb */
+.md-toggle-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow:
+    0 3px 8px rgba(15, 23, 42, 0.35),
+    0 0 0 1px rgba(148, 163, 184, 0.4);
+
+  transform: translateX(0);
+  transition:
+    transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 0.22s ease,
+    background 0.22s ease;
+}
+
+/* ON state */
+.md-toggle-on .md-toggle-track {
+  background: radial-gradient(circle at 0% 0%, #a7f3d0, #22c55e);
+  box-shadow:
+    0 0 0 1px rgba(16, 185, 129, 0.35),
+    0 8px 16px rgba(16, 185, 129, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.md-toggle-on .md-toggle-thumb {
+  transform: translateX(22px);
+  background: #ecfdf5;
+  box-shadow:
+    0 4px 10px rgba(5, 150, 105, 0.55),
+    0 0 0 1px rgba(34, 197, 94, 0.5);
+}
+
+/* Subtle glow pulse when ON */
+.md-toggle-on .md-toggle-track::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(45, 212, 191, 0.45), transparent 70%);
+  opacity: 0.9;
+  animation: mdTogglePulse 1.5s infinite ease-out;
+}
+
+/* Hover effect (desktop) */
+@media (hover: hover) {
+  .md-toggle:hover .md-toggle-track {
+    box-shadow:
+      0 0 0 1px rgba(15, 23, 42, 0.12),
+      0 10px 18px rgba(15, 23, 42, 0.25),
+      inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  }
+
+  .md-toggle-on:hover .md-toggle-track {
+    box-shadow:
+      0 0 0 1px rgba(16, 185, 129, 0.5),
+      0 12px 22px rgba(16, 185, 129, 0.65),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  }
+}
+
+/* Pulse keyframes */
+@keyframes mdTogglePulse {
+  0% {
+    opacity: 0.9;
+    transform: scale(0.98);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.12);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
 }
 
 
@@ -903,4 +1042,52 @@
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
+}
+
+/* HTML: <div class="loader"></div> */
+/* LOADER */
+.loader {
+  width: 60px;
+  aspect-ratio: 1;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.loader:before,
+.loader:after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  inset: 0;
+  background:
+    radial-gradient(circle 10px, #fb7602 94%, #0000),
+    repeating-conic-gradient(from -30deg, #0000 0 60deg, #11b71c 61deg 120deg);
+  -webkit-mask: radial-gradient(circle 15px, #000 calc(100% - 6px), #0000 calc(100% - 5px) 94%, #000);
+  mask: radial-gradient(circle 15px, #000 calc(100% - 6px), #0000 calc(100% - 5px) 94%, #000);
+}
+
+.loader:after {
+  animation: l4 1s infinite;
+  transform: perspective(300px) translateZ(0px);
+}
+
+@keyframes l4 {
+  to {
+    transform: perspective(300px) translateZ(150px);
+    opacity: 0;
+  }
+}
+
+.progress-text {
+  color: #0b0b0b;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: center;
+  position: fixed;
+  top: calc(50% + 50px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Poppins', sans-serif;
 }
