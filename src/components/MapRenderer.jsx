@@ -62,7 +62,13 @@ const getSiteId = (props) =>
 const getBand = (props) => getFirstProp(props, ["band", "BAND", "Band"]);
 
 const getCellName = (props) =>
-  getFirstProp(props, ["cellname", "Cell_name", "CELLNAME", "CELL_NAME"]);
+  getFirstProp(props, [
+    "cellname",
+    "Cellname",
+    "Cell_name",
+    "CELLNAME",
+    "CELL_NAME",
+  ]);
 
 const getAzimuth = (props, fallback) => {
   const raw = getFirstProp(props, [
@@ -79,13 +85,22 @@ const normalizeGeneration = (val) => {
   const s = normalize(val);
   if (!s) return "";
 
-  if (s.includes("5G")) return "5G";
-  if (s.includes("4G") || s.includes("LTE")) return "4G";
+  // ⭐ LTE bands
+  if (
+    s.includes("L") ||
+    s.includes("LTE") ||
+    s.includes("800") ||
+    s.includes("1800") ||
+    s.includes("2100")
+  )
+    return "4G";
+
+  if (s.includes("5G") || s.includes("NR")) return "5G";
   if (s.includes("3G") || s.includes("UMTS") || s.includes("WCDMA"))
     return "3G";
-  if (s.includes("2G") || s.includes("GSM") || s.includes("EDGE")) return "2G";
+  if (s.includes("2G") || s.includes("GSM")) return "2G";
 
-  return s; // fallback
+  return "";
 };
 
 const bandNumber = (band) => {
@@ -101,20 +116,20 @@ const createRingSlice = (
   outerKm,
   startDeg,
   endDeg,
-  stepDeg = 3,
+  stepDeg = 3
 ) => {
   const outer = [];
   for (let a = startDeg; a <= endDeg + 1e-6; a += stepDeg) {
     outer.push(
       turf.destination(center, outerKm, a, { units: "kilometers" }).geometry
-        .coordinates,
+        .coordinates
     );
   }
   const inner = [];
   for (let a = endDeg; a >= startDeg - 1e-6; a -= stepDeg) {
     inner.push(
       turf.destination(center, innerKm, a, { units: "kilometers" }).geometry
-        .coordinates,
+        .coordinates
     );
   }
   const ring = [...outer, ...inner, outer[0]];
@@ -128,10 +143,10 @@ const createPopupHtml = (props = {}, extra = {}) => {
     return `
       <tr>
         <td style="padding:4px 8px;border-bottom:1px solid #eee;"><strong>${escapeHtml(
-          k,
+          k
         )}</strong></td>
         <td style="padding:4px 8px;border-bottom:1px solid #eee;">${escapeHtml(
-          v,
+          v
         )}</td>
       </tr>`;
   });
@@ -157,7 +172,7 @@ const hslToHex = (h, s, l) => {
   const a = s * Math.min(l, 1 - l);
   const f = (n) =>
     Math.round(
-      255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)))),
+      255 * (l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))))
     )
       .toString(16)
       .padStart(2, "0");
@@ -183,7 +198,7 @@ const createSectorPolygonFeature = (
   radiusKm,
   azimuthDeg,
   widthDeg,
-  step = 4,
+  step = 4
 ) => {
   const start = azimuthDeg - widthDeg / 2;
   const end = azimuthDeg + widthDeg / 2;
@@ -192,7 +207,7 @@ const createSectorPolygonFeature = (
   for (let a = start; a <= end; a += step) {
     outer.push(
       turf.destination(center, radiusKm, a, { units: "kilometers" }).geometry
-        .coordinates,
+        .coordinates
     );
   }
 
@@ -240,7 +255,7 @@ const MapRenderer = ({
   const mapInstance = useRef(null);
 
   const [internalStyle, setInternalStyle] = useState(
-    mapStyle || "mapbox://styles/mapbox/outdoors-v12",
+    mapStyle || "mapbox://styles/mapbox/outdoors-v12"
   );
   const lastZoomedDB = useRef(null);
   // 🆕 CACHED DATA FOR STYLE SWITCHING
@@ -251,6 +266,10 @@ const MapRenderer = ({
   const [expandBandMode, setExpandBandMode] = useState(false);
   const [alarmLegend, setAlarmLegend] = useState([]);
   const [trafficLegend, setTrafficLegend] = useState([]);
+  const [datePanelCollapsed, setDatePanelCollapsed] = useState(false);
+  const lastClickedOriginalFeatureRef = useRef(null);
+
+
 
   const [showLegend, setShowLegend] = useState(true);
   const [legendMode, setLegendMode] = useState("sector"); // sector | driveTest | grid | generation | rca | cmchange | band
@@ -259,7 +278,8 @@ const MapRenderer = ({
   const remapAlarmValue = (val) => {
     if (!val) return val;
     const s = String(val).trim();
-    if (s.toLowerCase() === "local fm" || s.toLowerCase() === "gdc fm") return "Operational Issue";
+    if (s.toLowerCase() === "local fm" || s.toLowerCase() === "gdc fm")
+      return "Operational Issue";
     return s;
   };
 
@@ -316,7 +336,7 @@ const MapRenderer = ({
     setAlarmLegend([]);
   }, [tableType, geojsonData]);
 
-useEffect(() => {
+  useEffect(() => {
     const typeLower = (tableType || "").toLowerCase();
 
     if (!typeLower.includes("traffic")) {
@@ -350,8 +370,7 @@ useEffect(() => {
     }
 
     setTrafficLegend([]);
-}, [tableType, geojsonData]);
-
+  }, [tableType, geojsonData]);
 
   // Legend / color state
   const [rcaLegend, setRcaLegend] = useState([]); // [{issue, color}]
@@ -525,6 +544,77 @@ useEffect(() => {
       console.warn("rebuildMapSourcesAndLayers setData error:", e);
     }
   };
+const findOriginalFeature = (clickedProps, geojsonData) => {
+  if (!geojsonData?.features?.length) return null;
+
+  const siteId = normalize(getSiteId(clickedProps));
+  const cell = normalize(getCellName(clickedProps));
+  const band = normalize(getBand(clickedProps));
+  const date =
+    clickedProps.Date ||
+    clickedProps.date ||
+    clickedProps.D1DATE ||
+    clickedProps.Delta_Date;
+
+  return geojsonData.features.find((f) => {
+    const p = f.properties || {};
+    return (
+      normalize(getSiteId(p)) === siteId &&
+      (!cell || normalize(getCellName(p)) === cell) &&
+      (!band || normalize(getBand(p)) === band) &&
+      (!date || String(p.Date || p.date || "").includes(String(date)))
+    );
+  });
+};
+const findRepresentativeCell = (props, geojsonData) => {
+  if (!geojsonData?.features?.length) return null;
+
+  const siteId = normalize(getSiteId(props));
+  const band = normalize(getBand(props));
+  const date =
+    props.Date ||
+    props.date ||
+    props.D1DATE ||
+    props.Delta_Date;
+
+  if (!siteId) return null;
+
+  // 1️⃣ Same site + same band + same date
+  let f = geojsonData.features.find((feat) => {
+    const p = feat.properties || {};
+    return (
+      normalize(getSiteId(p)) === siteId &&
+      normalize(getBand(p)) === band &&
+      getCellName(p) &&
+      date &&
+      String(p.Date || p.date || "").includes(String(date))
+    );
+  });
+  if (f) return f;
+
+  // 2️⃣ Same site + same band (IGNORE DATE) ⭐ KEY FIX
+  f = geojsonData.features.find((feat) => {
+    const p = feat.properties || {};
+    return (
+      normalize(getSiteId(p)) === siteId &&
+      normalize(getBand(p)) === band &&
+      getCellName(p)
+    );
+  });
+  if (f) return f;
+
+  // 3️⃣ Same site + any cell (IGNORE band + date)
+  return (
+    geojsonData.features.find((feat) => {
+      const p = feat.properties || {};
+      return (
+        normalize(getSiteId(p)) === siteId &&
+        getCellName(p)
+      );
+    }) || null
+  );
+};
+
 
   /* ---------------- Map init ---------------- */
   useEffect(() => {
@@ -632,59 +722,61 @@ useEffect(() => {
         });
       }
       // ⭐ ADD THIS: Global polygon loader for uploaded ZIP shapefile
-window.loadPolygonLayer = function (geojson) {
-  console.log("🌍 Loading custom polygon layer...", geojson);
+      window.loadPolygonLayer = function (geojson) {
+        console.log("🌍 Loading custom polygon layer...", geojson);
 
-  const map = mapInstance.current;
-  if (!map) {
-    console.error("❌ Map not ready");
-    return;
-  }
+        const map = mapInstance.current;
+        if (!map) {
+          console.error("❌ Map not ready");
+          return;
+        }
 
-  // Remove old layer/source if present
-  if (map.getLayer("custom-polygon-fill")) map.removeLayer("custom-polygon-fill");
-  if (map.getLayer("custom-polygon-outline")) map.removeLayer("custom-polygon-outline");
-  if (map.getSource("custom-polygon-source")) map.removeSource("custom-polygon-source");
+        // Remove old layer/source if present
+        if (map.getLayer("custom-polygon-fill"))
+          map.removeLayer("custom-polygon-fill");
+        if (map.getLayer("custom-polygon-outline"))
+          map.removeLayer("custom-polygon-outline");
+        if (map.getSource("custom-polygon-source"))
+          map.removeSource("custom-polygon-source");
 
-  // Add fresh source
-  map.addSource("custom-polygon-source", {
-    type: "geojson",
-    data: geojson,
-  });
+        // Add fresh source
+        map.addSource("custom-polygon-source", {
+          type: "geojson",
+          data: geojson,
+        });
 
-  // Fill layer
-  map.addLayer({
-    id: "custom-polygon-fill",
-    type: "fill",
-    source: "custom-polygon-source",
-    paint: {
-      "fill-color": "#0080ff",
-      "fill-opacity": 0.25,
-    },
-  });
+        // Fill layer
+        map.addLayer({
+          id: "custom-polygon-fill",
+          type: "fill",
+          source: "custom-polygon-source",
+          paint: {
+            "fill-color": "#0080ff",
+            "fill-opacity": 0.25,
+          },
+        });
 
-  // Outline layer
-  map.addLayer({
-    id: "custom-polygon-outline",
-    type: "line",
-    source: "custom-polygon-source",
-    paint: {
-      "line-color": "#0040ff",
-      "line-width": 2,
-    },
-  });
+        // Outline layer
+        map.addLayer({
+          id: "custom-polygon-outline",
+          type: "line",
+          source: "custom-polygon-source",
+          paint: {
+            "line-color": "#0040ff",
+            "line-width": 2,
+          },
+        });
 
-  // Auto zoom
-  try {
-    const bbox = turf.bbox(geojson);
-    map.fitBounds(bbox, { padding: 40 });
-  } catch (e) {
-    console.warn("Could not fit polygon bbox:", e);
-  }
+        // Auto zoom
+        try {
+          const bbox = turf.bbox(geojson);
+          map.fitBounds(bbox, { padding: 40 });
+        } catch (e) {
+          console.warn("Could not fit polygon bbox:", e);
+        }
 
-  console.log("✅ Custom polygon rendered.");
-};
-
+        console.log("✅ Custom polygon rendered.");
+      };
 
       // highlighted feature
       if (!map.getLayer("highlighted-feature-layer")) {
@@ -740,7 +832,7 @@ window.loadPolygonLayer = function (geojson) {
           Cell_Name: getCellName(props) || "N/A",
           Band: getBand(props) || "N/A",
           KPI: (() => {
-            const raw = colorColumn ? (props[colorColumn] ?? "N/A") : "N/A";
+            const raw = colorColumn ? props[colorColumn] ?? "N/A" : "N/A";
             if (tableType.toLowerCase().includes("alarm"))
               return remapAlarmValue(raw);
             if (tableType.toLowerCase().includes("traffic"))
@@ -756,15 +848,21 @@ window.loadPolygonLayer = function (geojson) {
 
         // Info panel
         // ⭐ Always refresh site info even if same site clicked
-// FINAL FIX — ALWAYS refresh the site info panel
+        // FINAL FIX — ALWAYS refresh the site info panel
         // Info panel — show EXACT clicked cell
         const normalizedSite = normalize(siteId);
-        showSiteInfoFromFeature(feat);     // 👈 now CELL-based, not merged SITE
+        // 🔥 Resolve ORIGINAL feature (full data)
+const originalFeature =
+  findOriginalFeature(feat.properties || {}, geojsonData) || feat;
+
+// Info panel now uses FULL source/target data
+lastClickedOriginalFeatureRef.current = originalFeature;
+showSiteInfoFromFeature(originalFeature);
+setSelectedSiteIdState(normalize(siteId));
+setShowInfoPanel(true);
+// 👈 now CELL-based, not merged SITE
         setSelectedSiteIdState(normalizedSite);
         setShowInfoPanel(true);
-
-
-
 
         // notify parent for band dropdown etc.
         if (typeof onSiteClick === "function" && geojsonData?.features) {
@@ -831,8 +929,8 @@ window.loadPolygonLayer = function (geojson) {
         geojsonData.features
           .map((f) => getBand(f.properties || {}))
           .filter(Boolean)
-          .map((b) => String(b).toUpperCase().trim()),
-      ),
+          .map((b) => String(b).toUpperCase().trim())
+      )
     ).sort((a, b) => bandNumber(a) - bandNumber(b));
 
     const nextMap = {};
@@ -941,7 +1039,7 @@ window.loadPolygonLayer = function (geojson) {
 
       Object.entries(bySite).forEach(([site, feats]) => {
         const gensAtSite = Array.from(
-          new Set(feats.map((f) => f.properties.generation)),
+          new Set(feats.map((f) => f.properties.generation))
         );
         const ordered = GEN_ORDER.filter((g) => gensAtSite.includes(g));
         if (!ordered.length) return;
@@ -969,7 +1067,7 @@ window.loadPolygonLayer = function (geojson) {
               innerR,
               outerR,
               span.start,
-              span.end,
+              span.end
             );
 
             const ref = feats[0].properties || {};
@@ -1101,8 +1199,8 @@ window.loadPolygonLayer = function (geojson) {
             new Set(
               cellsInGen
                 .map((f) => normalize(getBand(f.properties)))
-                .filter(Boolean),
-            ),
+                .filter(Boolean)
+            )
           ).sort((a, b) => bandNumber(b) - bandNumber(a)); // high→low
 
           const bandCount = bands.length || 1;
@@ -1117,7 +1215,7 @@ window.loadPolygonLayer = function (geojson) {
             const ringOut = bOuter - gap * 0.5;
 
             const bandCells = cellsInGen.filter(
-              (f) => normalize(getBand(f.properties)) === normalize(bandName),
+              (f) => normalize(getBand(f.properties)) === normalize(bandName)
             );
 
             bandCells.forEach((cell) => {
@@ -1144,7 +1242,7 @@ window.loadPolygonLayer = function (geojson) {
                 ringOut,
                 snapped - SECTOR_WIDTH / 2,
                 snapped + SECTOR_WIDTH / 2,
-                STEP,
+                STEP
               );
 
               finalFeatures.push({
@@ -1188,66 +1286,70 @@ window.loadPolygonLayer = function (geojson) {
       const center = [cx, cy];
 
       // ALL bands originally present at this site
-const allBandsAtSite = Array.from(
-  new Set(
-    feats
-      .map((f) => getBand(f.properties || {}))
-      .filter(Boolean)
-      .map((b) => String(b).toUpperCase().trim()),
-  ),
-).sort((a, b) => bandNumber(a) - bandNumber(b));
+      const allBandsAtSite = Array.from(
+        new Set(
+          feats
+            .map((f) => getBand(f.properties || {}))
+            .filter(Boolean)
+            .map((b) => String(b).toUpperCase().trim())
+        )
+      ).sort((a, b) => bandNumber(a) - bandNumber(b));
 
-// Apply band filter at geometry level
-const bands =
-  selectedUniqueBands && selectedUniqueBands.length
-    ? allBandsAtSite.filter((b) =>
-        selectedUniqueBands
-          .map((x) => normalize(x))
-          .includes(normalize(b)),
-      )
-    : allBandsAtSite;
+      // Apply band filter at geometry level
+      const bands =
+        selectedUniqueBands && selectedUniqueBands.length
+          ? allBandsAtSite.filter((b) =>
+              selectedUniqueBands
+                .map((x) => normalize(x))
+                .includes(normalize(b))
+            )
+          : allBandsAtSite;
 
-if (!bands.length) {
-  // fallback: single ring with no band
-  feats.forEach((f, idx) => {
-    const props = f.properties || {};
-    const az = getAzimuth(props, (idx % 3) * 120);
-    const poly = createRingSlice(center, 0, radiusScale, az - 30, az + 30);
-    let fillColor = "#9ca3af";
+      if (!bands.length) {
+        // fallback: single ring with no band
+        feats.forEach((f, idx) => {
+          const props = f.properties || {};
+          const az = getAzimuth(props, (idx % 3) * 120);
+          const poly = createRingSlice(
+            center,
+            0,
+            radiusScale,
+            az - 30,
+            az + 30
+          );
+          let fillColor = "#9ca3af";
 
-    if (
-      props.generation &&
-      !tableTypeLower.includes("rca") &&
-      !tableTypeLower.includes("cm change") &&
-      !tableTypeLower.includes("alarm") &&
-      !tableTypeLower.includes("traffic")
-    ) {
-      const gen = String(props.generation).toUpperCase();
-      fillColor =
-        props.color ||
-        generationColorMap[gen] ||
-        GENERATION_COLORS[gen] ||
-        fillColor;
-    }
+          if (
+            props.generation &&
+            !tableTypeLower.includes("rca") &&
+            !tableTypeLower.includes("cm change") &&
+            !tableTypeLower.includes("alarm") &&
+            !tableTypeLower.includes("traffic")
+          ) {
+            const gen = String(props.generation).toUpperCase();
+            fillColor =
+              props.color ||
+              generationColorMap[gen] ||
+              GENERATION_COLORS[gen] ||
+              fillColor;
+          }
 
-    sectorFeatures.push({
-      type: "Feature",
-      geometry: poly.geometry,
-      properties: {
-        ...props,
-        site_id: siteId,
-        band: "N/A",
-        fillColor,
-      },
-    });
-  });
-  return;
-}
+          sectorFeatures.push({
+            type: "Feature",
+            geometry: poly.geometry,
+            properties: {
+              ...props,
+              site_id: siteId,
+              band: "N/A",
+              fillColor,
+            },
+          });
+        });
+        return;
+      }
 
-const N = bands.length;
-const thickness = radiusScale / N;
-
-      
+      const N = bands.length;
+      const thickness = radiusScale / N;
 
       // now build ring-slice polygons
       bands.forEach((bandLabel, idx) => {
@@ -1255,8 +1357,7 @@ const thickness = radiusScale / N;
         const innerR = Math.max(0, outerR - thickness);
 
         const bandFeats = feats.filter(
-          (f) =>
-            normalize(getBand(f.properties || {})) === normalize(bandLabel),
+          (f) => normalize(getBand(f.properties || {})) === normalize(bandLabel)
         );
 
         if (!bandFeats.length) return;
@@ -1273,7 +1374,7 @@ const thickness = radiusScale / N;
             innerR,
             outerR,
             az - 30,
-            az + 30,
+            az + 30
           );
 
           // ---- Color logic per cell ----
@@ -1315,7 +1416,7 @@ const thickness = radiusScale / N;
             const issue = String(rawIssue).trim() || "[NULL]";
             if (!rcaColorMap[issue]) {
               const palette = [
-                "#f8fbfc", 
+                "#f8fbfc",
                 "#22c55e",
                 "#3b82f6",
                 "#f59e0b",
@@ -1380,7 +1481,7 @@ const thickness = radiusScale / N;
                   : Number(String(candidate).replace(/,/g, "").trim());
               if (Number.isFinite(val)) {
                 const band = cmBands.find(
-                  ({ from, to }) => val >= from && val <= to,
+                  ({ from, to }) => val >= from && val <= to
                 );
                 if (band) fillColor = band.color;
               }
@@ -1403,7 +1504,7 @@ const thickness = radiusScale / N;
                 : Number(String(kpiValRaw).replace(/,/g, "").trim());
             if (Number.isFinite(v)) {
               for (const [baseColor, [min, max]] of Object.entries(
-                colorRanges[colorColumn],
+                colorRanges[colorColumn]
               )) {
                 if (v >= Number(min) && v <= Number(max)) {
                   const overrideKey = `${colorColumn}__${baseColor}`;
@@ -1450,7 +1551,7 @@ const thickness = radiusScale / N;
               const match = alarmLegend.find(
                 (i) =>
                   remapAlarmValue(i.value) ===
-                  remapAlarmValue(String(val).trim()),
+                  remapAlarmValue(String(val).trim())
               );
 
               if (match) fillColor = match.color;
@@ -1497,7 +1598,7 @@ const thickness = radiusScale / N;
               const match = trafficLegend.find(
                 (i) =>
                   remapTrafficValue(i.value) ===
-                  remapTrafficValue(String(val).trim()),
+                  remapTrafficValue(String(val).trim())
               );
 
               if (match) fillColor = match.color;
@@ -1521,14 +1622,13 @@ const thickness = radiusScale / N;
     // apply band filter if any
     let filteredFeatures = sectorFeatures;
     // ⭐ Important fix — apply band FILTER correctly
-if (selectedUniqueBands?.length) {
-  filteredFeatures = filteredFeatures.filter(f =>
-    selectedUniqueBands
-      .map(x => normalize(x))
-      .includes(normalize(getBand(f.properties || {})))
-  );
-}
-
+    if (selectedUniqueBands?.length) {
+      filteredFeatures = filteredFeatures.filter((f) =>
+        selectedUniqueBands
+          .map((x) => normalize(x))
+          .includes(normalize(getBand(f.properties || {})))
+      );
+    }
 
     // apply column filters (region, city, etc.)
     if (Array.isArray(selectedColumnValues) && selectedColumnValues.length) {
@@ -1538,7 +1638,7 @@ if (selectedUniqueBands?.length) {
           if (!column || !Array.isArray(values) || !values.length) return true;
           const target = String(column).toLowerCase().trim();
           const propKey = Object.keys(props).find(
-            (k) => String(k).toLowerCase().trim() === target,
+            (k) => String(k).toLowerCase().trim() === target
           );
           if (!propKey) return true;
           const val = String(props[propKey]).toLowerCase().trim();
@@ -1625,7 +1725,7 @@ if (selectedUniqueBands?.length) {
     if (selectedDriveKPI && colorRanges[selectedDriveKPI]) {
       colorExpr = ["case"];
       for (const [baseColor, [min, max]] of Object.entries(
-        colorRanges[selectedDriveKPI],
+        colorRanges[selectedDriveKPI]
       )) {
         const key = `${selectedDriveKPI}__${baseColor}`;
         const finalColor = driveKpiColors[key] || baseColor;
@@ -1635,7 +1735,7 @@ if (selectedUniqueBands?.length) {
             [">=", ["to-number", ["get", selectedDriveKPI]], Number(min)],
             ["<=", ["to-number", ["get", selectedDriveKPI]], Number(max)],
           ],
-          finalColor,
+          finalColor
         );
       }
       colorExpr.push("#cccccc");
@@ -1661,7 +1761,7 @@ if (selectedUniqueBands?.length) {
         .setHTML(
           `<div style="font-size:12px;">
             <strong>${escapeHtml(selectedDriveKPI)}</strong>: ${escapeHtml(v)}
-          </div>`,
+          </div>`
         )
         .addTo(map);
     };
@@ -1913,29 +2013,175 @@ if (selectedUniqueBands?.length) {
       // ignore
     }
   };
-
-    /* ---------------- Info panel helpers ---------------- */
-
-  // 🟢 PURE: build info tables from a single clicked feature
-  const showSiteInfoFromFeature = (feature) => {
-    if (!feature) return;
-    const props = feature.properties || {};
-
-    const src = {};
-    const tgt = {};
-
-    Object.entries(props).forEach(([k, v]) => {
-      const lower = String(k).toLowerCase();
-      if (lower.includes("target") || lower.startsWith("tgt_")) {
-        tgt[k] = v;
-      } else {
-        src[k] = v;
-      }
-    });
-
-    setInfoSource(src);
-    setInfoTarget(tgt);
+  /* ---------------- KPI Trend Link helper ---------------- */
+  const getBaseProject = (proj) => {
+    if (!proj) return "";
+    // BHAU01_4G → BHAU01
+    const m = String(proj).match(/^([A-Z0-9]+)_/);
+    return m ? m[1] : proj;
   };
+
+const buildKpiTrendUrl = () => {
+  if (!infoSource || Object.keys(infoSource).length === 0) return null;
+
+  const siteId = getSiteId(infoSource);
+
+  const project =
+    getBaseProject(selectedProject) ||
+    getBaseProject(infoSource.project) ||
+    getBaseProject(infoSource.PROJECT) ||
+    getBaseProject(infoSource.db) ||
+    deriveProjectFromSiteId(siteId);
+
+  const tech = normalizeGeneration(
+    infoSource.generation ||
+      infoSource.GENERATION ||
+      infoSource.band ||
+      infoSource.BAND
+  );
+
+  // 👇 PRIMARY cell (clicked feature)
+  let cellName = getCellName(infoSource);
+
+  // 🟢 NEW: fallback for site-level / band-level sectors
+  if (!cellName) {
+    const baseProps =
+  lastClickedOriginalFeatureRef.current?.properties || infoSource;
+
+const fallback = findRepresentativeCell(baseProps, geojsonData);
+
+    if (fallback?.properties) {
+      cellName = getCellName(fallback.properties);
+      console.log("🟢 KPI Trend using representative cell:", cellName);
+    }
+  }
+
+  // 🔴 Hard stop only if STILL no cell
+  if (!cellName) {
+    console.warn("KPI Trend disabled — no cell available", {
+      siteId,
+      band: infoSource.band,
+    });
+    return null;
+  }
+
+  if (!project || !tech) {
+    console.warn("KPI Trend link missing params:", {
+      project,
+      tech,
+      cellName,
+      siteId,
+      selectedProject,
+    });
+    return null;
+  }
+
+  console.log("🔗 KPI Trend Params", {
+    project,
+    tech,
+    cellName,
+  });
+  console.log("🧪 KPI Trend resolution", {
+  clickedCell: getCellName(infoSource),
+  resolvedCell: cellName,
+  siteId,
+  band: infoSource.band,
+  date: window.__geoDateFilter?.dates,
+});
+
+
+  return `http://10.164.167.122/KPI-Analysis?project=${encodeURIComponent(
+    project
+  )}&tech=${encodeURIComponent(tech)}&cell_name=${encodeURIComponent(
+    cellName
+  )}`;
+};
+
+
+  /* ---------------- Info panel helpers ---------------- */
+
+const showSiteInfoFromFeature = (feature) => {
+  if (!feature) return;
+
+  const props = feature.properties || {};
+  const src = {};
+  const tgt = {};
+
+  Object.entries(props).forEach(([k, v]) => {
+    const lower = String(k).toLowerCase();
+    if (lower.includes("target") || lower.startsWith("tgt_")) {
+      tgt[k] = v;
+    } else {
+      src[k] = v;
+    }
+  });
+
+  // 🟢 Inject DATE context explicitly
+  const activeDates = window.__geoDateFilter?.dates;
+  if (activeDates) {
+    src["Active Date"] = activeDates;
+  }
+
+  // 🟢 Resolve FINAL display color (same logic as sector)
+let resolvedColor =
+  props.fillColor ||
+  props.color ||
+  "#cccccc";
+
+// Alarm mode
+if (tableType?.toLowerCase().includes("alarm") && alarmLegend?.length) {
+  const col = geojsonData?.color_config?.color_column || "KPI";
+  const val = props[col] ?? props[col.toLowerCase()];
+  const match = alarmLegend.find(
+    (i) => remapAlarmValue(i.value) === remapAlarmValue(String(val || "").trim())
+  );
+  if (match) resolvedColor = match.color;
+}
+
+// Traffic mode
+if (tableType?.toLowerCase().includes("traffic") && trafficLegend?.length) {
+  const col = geojsonData?.color_config?.color_column || "KPI";
+  const val = props[col] ?? props[col.toLowerCase()];
+  const match = trafficLegend.find(
+    (i) => remapTrafficValue(i.value) === remapTrafficValue(String(val || "").trim())
+  );
+  if (match) resolvedColor = match.color;
+}
+
+// CM Change remarks
+if (tableType?.toLowerCase().includes("cm change")) {
+  const remark = String(props.remarks || "").toLowerCase();
+  if (remark.startsWith("improv")) resolvedColor = cmLegend.improved;
+  else if (remark.startsWith("neutral")) resolvedColor = cmLegend.neutral;
+  else if (remark.startsWith("degrad")) resolvedColor = cmLegend.degraded;
+}
+
+// 🔥 Inject FINAL color into source info
+src["Color"] = resolvedColor;
+src["Fillcolor"] = resolvedColor;
+// 🔧 FIX: resolve cell for colorless / site-level sectors
+if (!getCellName(src)) {
+  const fallbackCell = findRepresentativeCell(props, geojsonData);
+  if (fallbackCell?.properties) {
+    const cellProps = fallbackCell.properties;
+
+    src["Cellname"] =
+      getCellName(cellProps);
+
+    src["generation"] =
+      src["generation"] ||
+      cellProps.generation;
+
+    src["Derived Cell"] = "Yes"; // 🔍 debug-visible (optional)
+  }
+}
+
+
+setInfoSource(src);
+setInfoTarget(tgt);
+
+};
+
 
   // 🔁 Used by the "Refresh" button: pick *one* feature of that site
   const showSiteInfoBySiteId = (siteId, data) => {
@@ -1947,7 +2193,15 @@ if (selectedUniqueBands?.length) {
     });
 
     if (!feat) return;
-    showSiteInfoFromFeature(feat);
+    // 🔥 Resolve ORIGINAL feature (full data)
+const originalFeature =
+  findOriginalFeature(feat.properties || {}, geojsonData) || feat;
+
+// Info panel now uses FULL source/target data
+showSiteInfoFromFeature(originalFeature);
+setSelectedSiteIdState(normalize(siteId));
+setShowInfoPanel(true);
+
   };
 
   /* ---------------- Search handlers ---------------- */
@@ -1986,6 +2240,17 @@ if (selectedUniqueBands?.length) {
     setSearchResults(results);
     setInternalHighlight(results[0]);
   };
+  const deriveProjectFromSiteId = (siteId) => {
+    if (!siteId) return "";
+    const s = String(siteId).toUpperCase();
+
+    if (s.startsWith("ZM")) return "BHAZ01";
+    if (s.startsWith("KA")) return "BHAU01";
+    if (s.startsWith("TN")) return "BHAT01";
+    // add mappings as needed
+
+    return "";
+  };
 
   const handleUndoSearch = () => {
     if (!searchHistory.length) return;
@@ -2009,6 +2274,110 @@ if (selectedUniqueBands?.length) {
       [gen]: newColor,
     }));
   };
+  const renderDatePanel = () => {
+  const raw = window.__geoDateFilter?.dates;
+  if (!raw) return null;
+
+  const dates = String(raw)
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+
+  if (!dates.length) return null;
+
+  const isCollapsed =
+    datePanelCollapsed && dates.length > 1; // auto-expand if single date
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        background: "#f8fafc",
+        borderBottom: "1px solid #e5e7eb",
+        padding: "8px 10px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+      }}
+    >
+      {/* Header row */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          cursor: dates.length > 1 ? "pointer" : "default",
+        }}
+        onClick={() => {
+          if (dates.length > 1) {
+            setDatePanelCollapsed((v) => !v);
+          }
+        }}
+      >
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#111827",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+          }}
+        >
+          {/* Arrow */}
+          {dates.length > 1 && (
+            <span
+              style={{
+                fontSize: 12,
+                transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
+                transition: "transform 0.15s ease",
+                display: "inline-block",
+              }}
+            >
+              ▾
+            </span>
+          )}
+          📅 Active Date{dates.length > 1 ? "s" : ""}
+        </div>
+
+        {dates.length > 1 && (
+          <div
+            style={{
+              fontSize: 10,
+              color: "#6b7280",
+              fontWeight: 500,
+            }}
+          >
+            {isCollapsed ? "Show" : "Hide"}
+          </div>
+        )}
+      </div>
+
+      {/* Date list */}
+      {!isCollapsed &&
+        dates.map((d, idx) => (
+          <div
+            key={idx}
+            style={{
+              fontSize: 12,
+              padding: "4px 8px",
+              borderRadius: 4,
+              background: idx === 0 ? "#ecfdf5" : "#ffffff",
+              border: "1px solid #e5e7eb",
+              color: idx === 0 ? "#047857" : "#374151",
+              fontWeight: idx === 0 ? 600 : 500,
+              textAlign: "center",
+            }}
+          >
+            {d}
+            {idx === 0 && dates.length > 1 && (
+              <span style={{ marginLeft: 6, fontSize: 10 }}>(latest)</span>
+            )}
+          </div>
+        ))}
+    </div>
+  );
+};
 
   const renderLegendContent = () => {
     const typeLower = (tableType || "").toLowerCase();
@@ -2103,10 +2472,8 @@ if (selectedUniqueBands?.length) {
                   const newColor = e.target.value;
                   setRcaLegend((prev) =>
                     prev.map((item) =>
-                      item.issue === issue
-                        ? { ...item, color: newColor }
-                        : item,
-                    ),
+                      item.issue === issue ? { ...item, color: newColor } : item
+                    )
                   );
                 }}
                 style={{
@@ -2202,8 +2569,8 @@ if (selectedUniqueBands?.length) {
                   const newColor = e.target.value;
                   setCmLegend((prev) =>
                     prev.map((band, i) =>
-                      i === idx ? { ...band, color: newColor } : band,
-                    ),
+                      i === idx ? { ...band, color: newColor } : band
+                    )
                   );
                 }}
                 style={{
@@ -2261,7 +2628,7 @@ if (selectedUniqueBands?.length) {
                   </span>
                 </div>
               );
-            },
+            }
           )}
         </>
       );
@@ -2309,7 +2676,7 @@ if (selectedUniqueBands?.length) {
                   </span>
                 </div>
               );
-            },
+            }
           )}
         </>
       );
@@ -2411,7 +2778,7 @@ if (selectedUniqueBands?.length) {
                 onChange={(e) => {
                   const newColor = e.target.value;
                   const updated = alarmLegend.map((i, j) =>
-                    j === idx ? { ...i, color: newColor } : i,
+                    j === idx ? { ...i, color: newColor } : i
                   );
                   setAlarmLegend(updated); // <-- YOU MUST CREATE THIS STATE
                 }}
@@ -2451,7 +2818,7 @@ if (selectedUniqueBands?.length) {
                 onChange={(e) => {
                   const newColor = e.target.value;
                   const updated = trafficLegend.map((i, j) =>
-                    j === idx ? { ...i, color: newColor } : i,
+                    j === idx ? { ...i, color: newColor } : i
                   );
                   setTrafficLegend(updated); // <-- YOU MUST CREATE THIS STATE
                 }}
@@ -2677,27 +3044,27 @@ if (selectedUniqueBands?.length) {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
-  className="btn-outline"
-  onClick={() => {
-    if (!selectedSiteIdState && geojsonData?.features?.length) {
-      const first = geojsonData.features[0]?.properties || {};
-      const sid =
-        first?.site_id ||
-        first?.Site_ID ||
-        first?.["SITE ID"] ||
-        first?.siteid ||
-        first?.SITE ||
-        first?.site;
-      if (sid) showSiteInfoBySiteId(sid, geojsonData);
-    } else if (selectedSiteIdState) {
-      showSiteInfoBySiteId(selectedSiteIdState, geojsonData);
-    }
-  }}
-  title="Refresh site info"
-  style={{ padding: "4px 8px" }}
->
-  Refresh
-</button>
+                className="btn-outline"
+                onClick={() => {
+                  if (!selectedSiteIdState && geojsonData?.features?.length) {
+                    const first = geojsonData.features[0]?.properties || {};
+                    const sid =
+                      first?.site_id ||
+                      first?.Site_ID ||
+                      first?.["SITE ID"] ||
+                      first?.siteid ||
+                      first?.SITE ||
+                      first?.site;
+                    if (sid) showSiteInfoBySiteId(sid, geojsonData);
+                  } else if (selectedSiteIdState) {
+                    showSiteInfoBySiteId(selectedSiteIdState, geojsonData);
+                  }
+                }}
+                title="Refresh site info"
+                style={{ padding: "4px 8px" }}
+              >
+                Refresh
+              </button>
 
               <button
                 className="btn-outline"
@@ -2712,6 +3079,34 @@ if (selectedUniqueBands?.length) {
 
           {/* content */}
           <div style={{ overflow: "auto", padding: 12 }}>
+            {/* 🔗 KPI Trend Analysis Link */}
+            {buildKpiTrendUrl() && (
+              <div
+                style={{
+                  marginBottom: 14,
+                  padding: "8px 10px",
+                  background: "#f0fdf4",
+                  border: "1px solid #bbf7d0",
+                  borderRadius: 6,
+                }}
+              >
+                <a
+                  href={buildKpiTrendUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    color: "#047857",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    textDecoration: "underline",
+                    cursor: "pointer",
+                  }}
+                >
+                  📈 KPI Trend Analysis
+                </a>
+              </div>
+            )}
+
             {/* Source table */}
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>📊 Source</div>
@@ -2916,30 +3311,37 @@ if (selectedUniqueBands?.length) {
             right: 2,
             zIndex: 12000,
             background: "#ffffff",
-            padding: 12,
             borderRadius: 8,
             boxShadow: "0 4px 16px rgba(0,0,0,0.12)",
+            overflow: "hidden", // ⭐ important for clean stacking
+            width: 260, // ⭐ SINGLE SOURCE OF WIDTH
           }}
         >
-          <select
-            value={legendMode}
-            onChange={(e) => setLegendMode(e.target.value)}
-            className="input"
-            style={{ marginBottom: 10, width: "100%" }}
-          >
-            <option value="generation">Generation Colors</option>
-            <option value="sector">Sector KPI</option>
-            <option value="band">Band Colors</option>
-            <option value="driveTest">Drive Test KPI</option>
-            <option value="grid">Grid KPI</option>
-            <option value="rca">RCA Analysis</option>
-            <option value="cmchange">CM Change Analysis</option>
-            <option value="alarm">Alarm Analysis</option>
-            <option value="traffic">Traffic Analysis</option>
-          </select>
+          {/* 📅 Date panel — looks like legend header */}
+          {renderDatePanel()}
 
-          <div style={{ maxHeight: 280, overflow: "auto" }}>
-            {renderLegendContent()}
+          {/* Legend body */}
+          <div style={{ padding: 12 }}>
+            <select
+              value={legendMode}
+              onChange={(e) => setLegendMode(e.target.value)}
+              className="input"
+              style={{ marginBottom: 10, width: "100%" }}
+            >
+              <option value="generation">Generation Colors</option>
+              <option value="sector">Sector KPI</option>
+              <option value="band">Band Colors</option>
+              <option value="driveTest">Drive Test KPI</option>
+              <option value="grid">Grid KPI</option>
+              <option value="rca">RCA Analysis</option>
+              <option value="cmchange">CM Change Analysis</option>
+              <option value="alarm">Alarm Analysis</option>
+              <option value="traffic">Traffic Analysis</option>
+            </select>
+
+            <div style={{ maxHeight: 280, overflow: "auto" }}>
+              {renderLegendContent()}
+            </div>
           </div>
         </div>
       )}

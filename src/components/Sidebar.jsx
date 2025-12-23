@@ -35,6 +35,12 @@ const LEGEND_TYPES = [
   { value: "sector", label: "Sector Colors" },
   { value: "driveTest", label: "Drive Test KPI" },
 ];
+function appendDateParams(url) {
+  const params = window.__geoDateFilter || {};
+  const q = new URLSearchParams(params);
+  if ([...q].length === 0) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}${q.toString()}`;
+}
 
 function getColorForValue(value, colorBands) {
   for (const { color, from, to } of colorBands) {
@@ -44,6 +50,10 @@ function getColorForValue(value, colorBands) {
 }
 let warned = false;
 let missingColorKeysLogged = new Set();
+function normalizeBand(val) {
+  if (val == null) return "";
+  return String(val).trim().toUpperCase();
+}
 
 function generateSectorGeoJSON(features, colorColumn, colorBands) {
   if (!colorColumn || typeof colorColumn !== "string") {
@@ -148,6 +158,12 @@ const Sidebar = ({
   availableProjects,
   setAvailableProjects,
 }) => {
+  // === Date Filter State ===
+  const [availableDates, setAvailableDates] = useState([]);
+  const [selectedDates, setSelectedDates] = useState([]);
+  const [dateSearch, setDateSearch] = useState("");
+  const [isDateOpen, setIsDateOpen] = useState(false);
+
   const [targetRanges, setTargetRanges] = useState({});
   const [addingColorTarget, setAddingColorTarget] = useState({});
   const [newColorNameTarget, setNewColorNameTarget] = useState({});
@@ -173,6 +189,7 @@ const Sidebar = ({
 
   const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null);
   const [showJoinConfig, setShowJoinConfig] = useState(false);
+  const [activeTableType, setActiveTableType] = useState(null);
 
   const [filters, setFilters] = useState([]);
   const [searchTexts, setSearchTexts] = useState({});
@@ -238,72 +255,76 @@ const Sidebar = ({
   const [fetchingGridKPI, setFetchingGridKPI] = useState(false);
   const [gridKpiProgress, setGridKpiProgress] = useState(0);
   const [polygonFiles, setPolygonFiles] = useState([]);
-const [selectedPolygon, setSelectedPolygon] = useState("");
-const [uploadedZipId, setUploadedZipId] = useState(null);
+  const [selectedPolygon, setSelectedPolygon] = useState("");
+  const [uploadedZipId, setUploadedZipId] = useState(null);
 
-const handlePolygonZipUpload = async (e) => {
-  const file = e.target.files[0];
-  console.log("📂 ZIP Upload triggered. File selected:", file);
+  const handlePolygonZipUpload = async (e) => {
+    const file = e.target.files[0];
+    console.log("📂 ZIP Upload triggered. File selected:", file);
 
-  if (!file) {
-    console.warn("⚠️ No ZIP file selected.");
-    return;
-  }
+    if (!file) {
+      console.warn("⚠️ No ZIP file selected.");
+      return;
+    }
 
-  const formData = new FormData();
-  formData.append("file", file);
+    const formData = new FormData();
+    formData.append("file", file);
 
-  const url = `${getApiBaseUrl()}/polygon/upload-zip`;
-  console.log("⬆️ Uploading ZIP to:", url);
+    const url = `${getApiBaseUrl()}/polygon/upload-zip`;
+    console.log("⬆️ Uploading ZIP to:", url);
 
-  const res = await fetch(url, {
-    method: "POST",
-    body: formData,
-  });
+    const res = await fetch(url, {
+      method: "POST",
+      body: formData,
+    });
 
-  console.log("📥 Response status:", res.status);
+    console.log("📥 Response status:", res.status);
 
-  const data = await res.json();
-  console.log("✅ ZIP Upload Response:", data);
+    const data = await res.json();
+    console.log("✅ ZIP Upload Response:", data);
 
-  setUploadedZipId(data.zip_id);
-  setPolygonFiles(data.files);
-};
+    setUploadedZipId(data.zip_id);
+    setPolygonFiles(data.files);
+  };
 
-const fetchPolygonGeoJSON = async () => {
-  console.log("🟢 Load Polygon Button Clicked!");
-  console.log("➡️ uploadedZipId:", uploadedZipId);
-  console.log("➡️ selectedPolygon:", selectedPolygon);
+  const fetchPolygonGeoJSON = async () => {
+    console.log("🟢 Load Polygon Button Clicked!");
+    console.log("➡️ uploadedZipId:", uploadedZipId);
+    console.log("➡️ selectedPolygon:", selectedPolygon);
 
-  if (!uploadedZipId || !selectedPolygon) {
-    console.warn("⚠️ Missing zip_id or polygon file!");
-    return;
-  }
+    if (!uploadedZipId || !selectedPolygon) {
+      console.warn("⚠️ Missing zip_id or polygon file!");
+      return;
+    }
 
-  const url = `${getApiBaseUrl()}/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(selectedPolygon)}`;
-  console.log("📡 Fetching Polygon GeoJSON:", url);
+    const url = `${getApiBaseUrl()}/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(
+      selectedPolygon
+    )}`;
+    console.log("📡 Fetching Polygon GeoJSON:", url);
 
-  const res = await fetch(url);
-  console.log("📥 Response status:", res.status);
+    const res = await fetch(url);
+    console.log("📥 Response status:", res.status);
 
-  const data = await res.json();
-  console.log("📦 Polygon GeoJSON received:", data);
+    const data = await res.json();
+    console.log("📦 Polygon GeoJSON received:", data);
 
-  if (!window.loadPolygonLayer) {
-    console.error("❌ window.loadPolygonLayer is NOT defined!");
-  } else {
-    console.log("🚀 Calling window.loadPolygonLayer with data...");
-  }
+    if (!window.loadPolygonLayer) {
+      console.error("❌ window.loadPolygonLayer is NOT defined!");
+    } else {
+      console.log("🚀 Calling window.loadPolygonLayer with data...");
+    }
 
-  window.loadPolygonLayer?.(data);
-};
+    window.loadPolygonLayer?.(data);
+  };
 
   const handleTableTypeSelect = async (type, projectName) => {
     try {
       const safeType = type.replace("’", "'").trim();
-      const url = `${getApiBaseUrl()}/projects/${encodeURIComponent(
-        projectName,
-      )}/config?table_type=${encodeURIComponent(safeType)}`;
+      const url = appendDateParams(
+        `${getApiBaseUrl()}/projects/${encodeURIComponent(
+          projectName
+        )}/config?table_type=${encodeURIComponent(safeType)}`
+      );
 
       console.log("📡 Fetching config:", url);
       const res = await fetch(url);
@@ -316,15 +337,15 @@ const fetchPolygonGeoJSON = async () => {
       const configArray = Array.isArray(configs)
         ? configs
         : Array.isArray(configs.rows)
-          ? configs.rows
-          : [];
+        ? configs.rows
+        : [];
 
       if (configArray.length === 0) {
         console.warn(
           "⚠️ No configs found for:",
           projectName,
           safeType,
-          configs,
+          configs
         );
         return;
       }
@@ -332,14 +353,51 @@ const fetchPolygonGeoJSON = async () => {
       // ✅ Use the first config row
       const cfg = configArray[0];
       console.log("⚙️ Using config row:", cfg);
+      // ===============================
+      // 📅 Fetch available dates
+      // ===============================
+      try {
+        const datesUrl = `${getApiBaseUrl()}/available-dates?project=${encodeURIComponent(
+          cfg.project_name
+        )}&table_type=${encodeURIComponent(
+          cfg.table_type.replace("’", "'").trim()
+        )}`;
+
+        console.log("📅 Fetching available dates:", datesUrl);
+
+        const datesRes = await fetch(datesUrl);
+        if (!datesRes.ok) throw new Error("Failed to fetch dates");
+
+        const datesData = await datesRes.json();
+
+        console.log("📅 Available dates payload:", datesData);
+
+        // ✅ Safely extract available_dates
+        const dates = Array.isArray(datesData?.available_dates)
+          ? datesData.available_dates
+          : [];
+
+        setAvailableDates(dates);
+
+        // ✅ AUTO-SELECT LATEST DATE (DEFAULT SNAPSHOT)
+        if (dates.length > 0) {
+          setSelectedDates([dates[0]]); // latest date only
+        } else {
+          setSelectedDates([]);
+        }
+      } catch (err) {
+        console.error("❌ Failed fetching available dates:", err);
+        setAvailableDates([]);
+        setSelectedDates([]);
+      }
 
       // === Fetch columns for both tables ===
       const [sourceColsRes, targetColsRes] = await Promise.all([
         fetch(
-          `${getApiBaseUrl()}/columns/${encodeURIComponent(cfg.source_table)}`,
+          `${getApiBaseUrl()}/columns/${encodeURIComponent(cfg.source_table)}`
         ),
         fetch(
-          `${getApiBaseUrl()}/columns/${encodeURIComponent(cfg.target_table)}`,
+          `${getApiBaseUrl()}/columns/${encodeURIComponent(cfg.target_table)}`
         ),
       ]);
 
@@ -375,59 +433,18 @@ const fetchPolygonGeoJSON = async () => {
       setTargetConfigs([newConfig]);
       console.log("🧩 Auto-filled join config:", newConfig);
 
-      // === Auto fetch joined data (GeoJSON etc.) ===
-      const queryUrl = `${getApiBaseUrl()}/query?project=${encodeURIComponent(
-        cfg.project_name,
-      )}&table_type=${encodeURIComponent(
-        cfg.table_type.replace("’", "'").trim(),
-      )}`;
-
-      console.log("▶️ Auto-fetching polygons:", queryUrl);
-      const qRes = await fetch(queryUrl);
-      if (!qRes.ok) throw new Error(`Query failed: ${qRes.status}`);
-
-      const qData = await qRes.json();
-      console.log("📦 Query response (summary):", {
-        features: qData.features?.length,
-        bands: qData.bands?.length,
-        available_kpis: qData.available_kpis?.length,
-      });
-
-      // ✅ Log sample of features
-      if (qData?.features?.length > 0) {
-        qData.features.slice(0, 5).forEach((f, i) => {
-          console.log(`Feature ${i + 1}:`, f.properties);
-        });
-      } else {
-        console.warn("⚠️ No features returned in query response");
-      }
-
-      // ✅ Send map data to App.jsx
-      if (qData?.features) {
-        console.log("🚀 Sending data to App.jsx -> onGenerateMap()");
-
-        // ✅ Inject active table type and project name into payload
-        const enrichedData = {
-          ...qData,
-          table_type: safeType || cfg.table_type || "KPI's",
-          project_name: cfg.project_name || projectName,
-        };
-
-        onGenerateMap(enrichedData);
-      }
-
       // ✅ Populate band/KPI options
-      if (Array.isArray(qData.bands)) {
-        console.log("🎨 Available bands:", qData.bands);
-        setBandCellOptions(
-          qData.bands.map((band) => ({ band, cellname: band })),
-        );
-      }
+      // if (Array.isArray(qData.bands)) {
+      //   console.log("🎨 Available bands:", qData.bands);
+      //   setBandCellOptions(
+      //     qData.bands.map((band) => ({ band, cellname: band })),
+      //   );
+      // }
 
-      if (Array.isArray(qData.available_kpis)) {
-        console.log("📊 KPI columns:", qData.available_kpis);
-        setGridKPIColumns(qData.available_kpis);
-      }
+      // if (Array.isArray(qData.available_kpis)) {
+      //   console.log("📊 KPI columns:", qData.available_kpis);
+      //   setGridKPIColumns(qData.available_kpis);
+      // }
 
       setKpiSource({ type: "query", table: type });
     } catch (err) {
@@ -458,7 +475,7 @@ const fetchPolygonGeoJSON = async () => {
         {
           method: "POST",
           body: formData,
-        },
+        }
       );
 
       if (!res.ok) {
@@ -485,7 +502,7 @@ const fetchPolygonGeoJSON = async () => {
     } catch (err) {
       console.error("❌ Grid map upload failed:", err);
       alert(
-        "Grid map upload failed. Please check the file format or backend logs.",
+        "Grid map upload failed. Please check the file format or backend logs."
       );
     } finally {
       clearInterval(interval);
@@ -498,7 +515,7 @@ const fetchPolygonGeoJSON = async () => {
   };
 
   const [localSelectedGridKPI, setLocalSelectedGridKPI] = React.useState(
-    selectedGridKPI ?? null,
+    selectedGridKPI ?? null
   );
   const [addingColor, setAddingColor] = useState(false);
   const [newColorName, setNewColorName] = useState("");
@@ -524,9 +541,11 @@ const fetchPolygonGeoJSON = async () => {
 
     // ✅ One API call for both columns + geojson
     fetch(
-      `${import.meta.env.VITE_API_URL}/grid-map/from-table?table=${encodeURIComponent(
-        chosen,
-      )}`,
+      appendDateParams(
+        `${getApiBaseUrl()}/grid-map/from-table?table=${encodeURIComponent(
+          chosen
+        )}`
+      )
     )
       .then((r) => r.json())
       .then((data) => {
@@ -566,7 +585,7 @@ const fetchPolygonGeoJSON = async () => {
     if (!phdbTable) return;
 
     fetch(
-      `${import.meta.env.VITE_API_URL}/bands/${encodeURIComponent(phdbTable)}`,
+      `${import.meta.env.VITE_API_URL}/bands/${encodeURIComponent(phdbTable)}`
     )
       .then((res) => res.json())
       .then((data) => {
@@ -628,7 +647,7 @@ const fetchPolygonGeoJSON = async () => {
   // Handle band selection
   const handleBandSelection = (band) => {
     setSelectedBands((prev) =>
-      prev.includes(band) ? prev.filter((b) => b !== band) : [...prev, band],
+      prev.includes(band) ? prev.filter((b) => b !== band) : [...prev, band]
     );
   };
 
@@ -677,39 +696,38 @@ const fetchPolygonGeoJSON = async () => {
     }
 
     console.log(
-      `📡 Fetching projects for selected database: ${selectedDatabase}`,
+      `📡 Fetching projects for selected database: ${selectedDatabase}`
     );
 
     // --- Fetch and filter projects ---
-fetch(`${import.meta.env.VITE_API_URL}/projects`)
-  .then((res) => res.json())
-  .then((projects) => {
-    console.log("📌 All projects fetched:", projects);
+    fetch(`${import.meta.env.VITE_API_URL}/projects`)
+      .then((res) => res.json())
+      .then((projects) => {
+        console.log("📌 All projects fetched:", projects);
 
-    const filteredProjects = projects.filter((p) =>
-      p.toUpperCase().startsWith(selectedDatabase.toUpperCase()),
-    );
+        const filteredProjects = projects.filter((p) =>
+          p.toUpperCase().startsWith(selectedDatabase.toUpperCase())
+        );
 
-    console.log(
-      `📦 Filtered projects for ${selectedDatabase}:`,
-      filteredProjects,
-    );
+        console.log(
+          `📦 Filtered projects for ${selectedDatabase}:`,
+          filteredProjects
+        );
 
-    if (typeof setAvailableProjects === "function") {
-      setAvailableProjects(filteredProjects);
-    }
+        if (typeof setAvailableProjects === "function") {
+          setAvailableProjects(filteredProjects);
+        }
 
-    setTables(filteredProjects);
+        setTables(filteredProjects);
 
-    // ⛔ STOP auto selecting the first project
-    setPhdbTable("");      // Force dropdown to show "Select Project"
-    setSelectedProject(""); 
-  })
-  .catch((err) => {
-    console.error("❌ Failed to fetch projects:", err);
-    setTables([]);
-  });
-
+        // ⛔ STOP auto selecting the first project
+        setPhdbTable(""); // Force dropdown to show "Select Project"
+        setSelectedProject("");
+      })
+      .catch((err) => {
+        console.error("❌ Failed to fetch projects:", err);
+        setTables([]);
+      });
 
     // --- Fetch templates (unrelated to DB, so keep it global) ---
     fetch(`${import.meta.env.VITE_API_URL}/templates`)
@@ -728,7 +746,9 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
 
     // get config for this project/type
     fetch(
-      `${import.meta.env.VITE_API_URL}/projects/${encodeURIComponent(phdbTable)}/config?table_type=${encodeURIComponent(kpiSource.table)}`,
+      `${import.meta.env.VITE_API_URL}/projects/${encodeURIComponent(
+        phdbTable
+      )}/config?table_type=${encodeURIComponent(kpiSource.table)}`
     )
       .then((res) => res.json())
       .then((configs) => {
@@ -737,7 +757,9 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
 
         // now fetch columns for that source table
         return fetch(
-          `${import.meta.env.VITE_API_URL}/columns/${encodeURIComponent(source_table)}`,
+          `${import.meta.env.VITE_API_URL}/columns/${encodeURIComponent(
+            source_table
+          )}`
         )
           .then((res) => res.json())
           .then((fetchedCols) => {
@@ -748,13 +770,13 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               site_id: fetchedCols.includes("Site_ID")
                 ? "Site_ID"
                 : fetchedCols.includes("D2EL02")
-                  ? "D2EL02"
-                  : "",
+                ? "D2EL02"
+                : "",
               cellname: fetchedCols.includes("Cell_name")
                 ? "Cell_name"
                 : fetchedCols.includes("D2EL01")
-                  ? "D2EL01"
-                  : "",
+                ? "D2EL01"
+                : "",
               lat: fetchedCols.includes("Lat") ? "Lat" : "",
               lon: fetchedCols.includes("Long") ? "Long" : "",
               azimuth: fetchedCols.includes("Azimuth") ? "Azimuth" : "",
@@ -771,10 +793,10 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
   useEffect(() => {
     Promise.all(
       targetTables.map((table) =>
-        fetch(`${import.meta.env.VITE_API_URL}/columns/${table}`)
+        fetch(`${getApiBaseUrl()}/columns/${encodeURIComponent(table)}`)
           .then((res) => res.json())
-          .then((columns) => ({ table, columns })),
-      ),
+          .then((columns) => ({ table, columns }))
+      )
     ).then((results) => {
       setTargetConfigs((prevConfigs) =>
         results.map(({ table, columns }) => {
@@ -785,7 +807,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             selectedCols: existing?.selectedCols || [],
             joinOn: existing?.joinOn || { physical: "", target: "" },
           };
-        }),
+        })
       );
     });
   }, [targetTables]);
@@ -836,6 +858,119 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
       .then(setSavedTemplates)
       .catch(() => alert("Failed to save template."));
   };
+  // useEffect(() => {
+  //   // expose dates globally for map/query refresh
+  //   window.__geoDateFilter = {
+  //     from_date: fromDate || null,
+  //     to_date: toDate || null,
+  //   };
+
+  //   // optional: auto refresh map when date changes
+  //   if (window.refreshLayerMap) {
+  //     window.refreshLayerMap();
+  //   }
+  // }, [fromDate, toDate]);
+
+  useEffect(() => {
+    // 🛑 Guard: do not set global date filter until context is ready
+    if (!phdbTable || !activeTableType) {
+      console.log("⏸️ Skipping global date filter (context not ready)", {
+        phdbTable,
+        activeTableType,
+        selectedDates,
+      });
+      return;
+    }
+
+    // ✅ Build date filter only when dates exist
+    const filter =
+      Array.isArray(selectedDates) && selectedDates.length > 0
+        ? { dates: selectedDates.join(",") }
+        : {};
+
+    // 🌍 Expose globally for query / grid / drive-test APIs
+    window.__geoDateFilter = filter;
+
+    console.log("🌍 Global date filter set:", window.__geoDateFilter);
+  }, [selectedDates, phdbTable, activeTableType]);
+
+  useEffect(() => {
+    // --------------------------------------------------
+    // 🛑 Guard: do NOTHING until everything is ready
+    // --------------------------------------------------
+    if (
+      !phdbTable ||
+      !activeTableType ||
+      !Array.isArray(selectedDates) ||
+      selectedDates.length === 0
+    ) {
+      console.log("⏸️ Date change ignored (not ready)", {
+        phdbTable,
+        activeTableType,
+        selectedDates,
+      });
+      return;
+    }
+
+    const safeType = activeTableType.replace("’", "'").trim();
+
+    const queryUrl = appendDateParams(
+      `${getApiBaseUrl()}/query?project=${encodeURIComponent(
+        phdbTable
+      )}&table_type=${encodeURIComponent(safeType)}`
+    );
+
+    console.log("🔁 Date changed → refetching polygons");
+    console.log("📡 Query URL:", queryUrl);
+
+    // --------------------------------------------------
+    // 🚀 START LOADER (valid query only)
+    // --------------------------------------------------
+    setLoading?.(true);
+
+    let aborted = false;
+
+    fetch(queryUrl)
+      .then((res) => res.json())
+      .then((data) => {
+        if (aborted) return;
+
+        console.log("🧩 Date-filtered GeoJSON:", {
+          features: data?.features?.length,
+        });
+
+        if (data?.features) {
+          // 🔥 IMPORTANT: Loader will stop AFTER MapRenderer finishes
+          onGenerateMap({
+            ...data,
+            project_name: phdbTable,
+            table_type: safeType,
+          });
+        }
+      })
+      .catch((err) => {
+        if (!aborted) {
+          console.error("❌ Date-based query failed:", err);
+        }
+      });
+
+    // --------------------------------------------------
+    // 🧹 Cleanup (prevent stale fetch side-effects)
+    // --------------------------------------------------
+    return () => {
+      aborted = true;
+    };
+  }, [selectedDates, phdbTable, activeTableType]);
+
+  useEffect(() => {
+    const onClick = (e) => {
+      if (!e.target.closest(".dropdown-wrapper")) {
+        setIsDateOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
 
   // 🎨 Whenever color ranges or layerColumn change, push updated coloring to map
   useEffect(() => {
@@ -846,7 +981,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
         color,
         from,
         to,
-      }),
+      })
     );
 
     // Reapply fillColor dynamically
@@ -881,7 +1016,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             columns: [],
             selectedCols: join.target_columns || [],
             joinOn: join.join_on || { physical: "", target: "" },
-          })),
+          }))
         );
         setLayerColumn(config.layerColumn || "");
         setBandColumn(config.bandColumn || "");
@@ -912,7 +1047,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             color,
             from,
             to,
-          }),
+          })
         ),
       }),
     };
@@ -935,7 +1070,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
       } else {
         console.warn(
           `⚠️ renderDropdown[${key}] received object instead of array:`,
-          options,
+          options
         );
         safeOptions = Object.values(options)
           .flat()
@@ -949,12 +1084,12 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
       console.warn(
         `⚠️ renderDropdown[${key}] received invalid options type:`,
         typeof options,
-        options,
+        options
       );
     }
 
     const filteredOptions = safeOptions.filter((opt) =>
-      String(opt).toLowerCase().includes(searchText.toLowerCase()),
+      String(opt).toLowerCase().includes(searchText.toLowerCase())
     );
 
     return (
@@ -993,9 +1128,9 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             />
 
             {/* ✅ Render list safely */}
-            {filteredOptions.map((option, i) => (
+            {filteredOptions.map((option) => (
               <div
-                key={i}
+                key={`${key}-${option}`}
                 className={`dropdown-item ${
                   multiple && Array.isArray(value) && value.includes(option)
                     ? "selected"
@@ -1058,7 +1193,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
         {
           method: "POST",
           body: formData,
-        },
+        }
       );
       if (!response.ok) throw new Error(`Error: ${response.status}`);
       const result = await response.json();
@@ -1074,8 +1209,8 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             k.toUpperCase().includes("RSRP") ||
             k.toUpperCase().includes("RSRQ") ||
             k.toUpperCase().includes("SINR") ||
-            k.toUpperCase().includes("EARFCN"),
-        ),
+            k.toUpperCase().includes("EARFCN")
+        )
       );
 
       // ✅ Pick default KPI and fetch its range immediately
@@ -1085,7 +1220,9 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
 
         try {
           const res = await fetch(
-            `${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(defaultKPI)}`,
+            `${
+              import.meta.env.VITE_API_URL
+            }/drive-test/column-range?column=${encodeURIComponent(defaultKPI)}`
           );
           const range = await res.json();
           if (range.min != null && range.max != null)
@@ -1125,8 +1262,13 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
 
     try {
       const res = await fetch(
-        `${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(kpi)}`,
+        appendDateParams(
+          `${getApiBaseUrl()}/drive-test/column-range?column=${encodeURIComponent(
+            kpi
+          )}`
+        )
       );
+
       const range = await res.json();
       if (range.min != null && range.max != null)
         setDriveLayerRange({ min: range.min, max: range.max });
@@ -1156,7 +1298,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
     const csvRows = [
       headers.join(","),
       ...geoJsonData.features.map((f) =>
-        headers.map((h) => JSON.stringify(f.properties[h] ?? "")).join(","),
+        headers.map((h) => JSON.stringify(f.properties[h] ?? "")).join(",")
       ),
     ];
     const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
@@ -1199,6 +1341,77 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
   return (
     <div className="left-panel">
       <div className="sidebar-scroll">
+        {/* === Date Filter (Multi-select) === */}
+        <div className="sidebar-section">
+          <label style={{ fontWeight: "bold" }}>📅 Select Dates</label>
+
+          <div className="dropdown-wrapper">
+            <button
+              type="button"
+              className="input"
+              onClick={() => setIsDateOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between" }}
+            >
+              <span>
+                {selectedDates.length
+                  ? `${selectedDates[0]}${
+                      selectedDates.length > 1
+                        ? ` (+${selectedDates.length - 1})`
+                        : ""
+                    }`
+                  : "Select Dates"}
+              </span>
+              <span>▾</span>
+            </button>
+
+            {isDateOpen && (
+              <div className="dropdown-list">
+                {/* Search */}
+                <input
+                  className="search-input"
+                  placeholder="Search date..."
+                  value={dateSearch}
+                  onChange={(e) => setDateSearch(e.target.value)}
+                />
+
+                {availableDates
+                  .filter((d) => d.includes(dateSearch))
+                  .map((date) => {
+                    const checked = selectedDates.includes(date);
+                    return (
+                      <div
+                        key={date}
+                        className={`dropdown-item ${checked ? "selected" : ""}`}
+                        onClick={() => {
+                          console.log("📅 Date clicked:", date);
+                          console.log("📅 Was already selected?", checked);
+
+                          setSelectedDates((prev) => {
+                            const next = checked
+                              ? prev.filter((d) => d !== date)
+                              : [...prev, date];
+
+                            console.log("📅 Updated selectedDates:", next);
+                            return next;
+                          });
+                        }}
+                      >
+                        <input type="checkbox" checked={checked} readOnly />
+                        <span style={{ marginLeft: 8 }}>{date}</span>
+                      </div>
+                    );
+                  })}
+
+                {availableDates.length === 0 && (
+                  <div className="dropdown-item disabled">
+                    No dates available
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
         <h3>Filter</h3>
         {/* Legend type selection
         <label>Legend Type</label>
@@ -1225,7 +1438,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
           savedTemplates,
           false,
           loadFilterTemplate,
-          setLoadFilterTemplate,
+          setLoadFilterTemplate
         )}
         <button className="btn" onClick={handleLoadTemplate}>
           Load Template
@@ -1243,10 +1456,15 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
 
               setPhdbTable(val);
               setSelectedProject(val); // ✅ Sync with App state
+              setActiveTableType(null);
+              setAvailableDates([]);
+              setSelectedDates([]);
 
               if (val) {
                 try {
-                  const url = `${getApiBaseUrl()}/projects/${encodeURIComponent(val)}/types`;
+                  const url = `${getApiBaseUrl()}/projects/${encodeURIComponent(
+                    val
+                  )}/types`;
                   console.log("📡 Fetching table types from:", url);
                   const res = await fetch(url);
 
@@ -1280,18 +1498,19 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               {availableTableTypes.map((type) => (
                 <button
                   key={type}
-                  className={`btn ${type === kpiSource.table ? "btn-primary" : "btn-outline"}`}
-                  onClick={() => {
-                    setLoading(true);  
-                    handleTableTypeSelect(type, phdbTable)
-                    .finally(() => setLoading(false));
+                  className={`btn ${
+                    type === kpiSource.table ? "btn-primary" : "btn-outline"
+                  }`}
+                  onClick={async () => {
                     console.log(
                       "▶️ Table type clicked:",
                       type,
                       "for project:",
-                      phdbTable,
+                      phdbTable
                     );
-                    handleTableTypeSelect(type, phdbTable);
+
+                    setActiveTableType(type); // triggers date + query lifecycle
+                    await handleTableTypeSelect(type, phdbTable);
                   }}
                 >
                   {type}
@@ -1379,10 +1598,10 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                       (val) => {
                         setTargetConfigs((prev) =>
                           prev.map((c, i) =>
-                            i === idx ? { ...c, source_table: val } : c,
-                          ),
+                            i === idx ? { ...c, source_table: val } : c
+                          )
                         );
-                      },
+                      }
                     )}
 
                     {/* --- Source Column --- */}
@@ -1397,10 +1616,10 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                           prev.map((c, i) =>
                             i === idx
                               ? { ...c, joinOn: { ...c.joinOn, physical: val } }
-                              : c,
-                          ),
+                              : c
+                          )
                         );
-                      },
+                      }
                     )}
 
                     {/* --- Target Table --- */}
@@ -1413,10 +1632,10 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                       (val) => {
                         setTargetConfigs((prev) =>
                           prev.map((c, i) =>
-                            i === idx ? { ...c, table: val } : c,
-                          ),
+                            i === idx ? { ...c, table: val } : c
+                          )
                         );
-                      },
+                      }
                     )}
 
                     {/* --- Target Column --- */}
@@ -1431,10 +1650,10 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                           prev.map((c, i) =>
                             i === idx
                               ? { ...c, joinOn: { ...c.joinOn, target: val } }
-                              : c,
-                          ),
+                              : c
+                          )
                         );
-                      },
+                      }
                     )}
                   </div>
                 ))}
@@ -1444,45 +1663,43 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
         )}
 
         {/* === Upload Polygon ZIP === */}
-<div className="sidebar-section">
-  <label>📂 Upload Polygon ZIP</label>
-  <input
-    type="file"
-    accept=".zip"
-    onChange={handlePolygonZipUpload}
-    className="input"
-  />
+        <div className="sidebar-section">
+          <label>📂 Upload Polygon ZIP</label>
+          <input
+            type="file"
+            accept=".zip"
+            onChange={handlePolygonZipUpload}
+            className="input"
+          />
 
-  {polygonFiles.length > 0 && (
-    <>
-      <label>Select Polygon File</label>
-      <select
-        className="input"
-        value={selectedPolygon}
-        onChange={(e) => setSelectedPolygon(e.target.value)}
-      >
-        <option value="">Select Polygon</option>
-        {polygonFiles.map((f) => (
-          <option key={f} value={f}>
-            {f}
-          </option>
-        ))}
-      </select>
+          {polygonFiles.length > 0 && (
+            <>
+              <label>Select Polygon File</label>
+              <select
+                className="input"
+                value={selectedPolygon}
+                onChange={(e) => setSelectedPolygon(e.target.value)}
+              >
+                <option value="">Select Polygon</option>
+                {polygonFiles.map((f) => (
+                  <option key={f} value={f}>
+                    {f}
+                  </option>
+                ))}
+              </select>
 
-      <button
-  className="btn"
-  onClick={() => {
-    console.log("🖱️ Button clicked: Load Polygon on Map");
-    fetchPolygonGeoJSON();
-  }}
->
-  Load Polygon on Map
-</button>
-
-    </>
-  )}
-</div>
-
+              <button
+                className="btn"
+                onClick={() => {
+                  console.log("🖱️ Button clicked: Load Polygon on Map");
+                  fetchPolygonGeoJSON();
+                }}
+              >
+                Load Polygon on Map
+              </button>
+            </>
+          )}
+        </div>
 
         {/* === Layer/Color Column Selection === */}
         <label>Select Column for Layer/Color</label>
@@ -1507,17 +1724,19 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   ? targetConfigs[0].table
                   : phdbTable || "";
 
-              const mergedTable = projectMap[mergedTableRaw] || mergedTableRaw; // ✅ Map friendly → backend-safe
+              const mergedTable = mergedTableRaw; // ✅ Map friendly → backend-safe
 
               console.log(
                 "🔍 Fetching column range from merged table:",
-                mergedTable,
+                mergedTable
               );
 
               const res = await fetch(
-                `${import.meta.env.VITE_API_URL}/column-range?table=${encodeURIComponent(
-                  mergedTable,
-                )}&column=${encodeURIComponent(selected)}`,
+                appendDateParams(
+                  `${getApiBaseUrl()}/column-range?table=${encodeURIComponent(
+                    mergedTable
+                  )}&column=${encodeURIComponent(selected)}`
+                )
               );
 
               const { min, max, error } = await res.json();
@@ -1552,7 +1771,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               // 🔁 Force map refresh after range update
               window.refreshLayerMap?.();
             }
-          },
+          }
         )}
 
         {layerColumn && layerRange.min != null && layerRange.max != null && (
@@ -1689,7 +1908,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                     ❌
                   </button>
                 </div>
-              ),
+              )
             )}
 
             {/* === Add New Color Band === */}
@@ -1799,11 +2018,13 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
           </div>
         )}
 
-        === Select Band Column (Optional) ===
-        <label>Select Band Column (Optional)</label>
+        {/* === Select Band Column (Optional) === */}
+
+        {/* <label>Select Band Column (Optional)</label>
+
 
         <div className="dropdown-wrapper" ref={bandDropdownRef}>
-          {/* Trigger bar */}
+         
           <button
             type="button"
             className="input"
@@ -1835,7 +2056,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
             <span aria-hidden>▾</span>
           </button>
 
-          {/* Dropdown list */}
+        
           {isBandDropdownOpen && (
             <div
               className="dropdown-list"
@@ -1932,7 +2153,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
           )}
         </div>
 
-        {/* === Color pickers for selected bands === */}
+   
         {Array.isArray(selectedBandCell) && selectedBandCell.length > 0 && (
           <div className="color-range-wrapper" style={{ marginTop: "10px" }}>
             {selectedBandCell.map((band) => (
@@ -1947,7 +2168,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   marginBottom: "6px",
                 }}
               >
-                {/* Band name */}
+               
                 <label
                   style={{
                     flex: 1,
@@ -1960,7 +2181,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   {band}
                 </label>
 
-                {/* Color preview box */}
+             
                 <span
                   style={{
                     display: "inline-block",
@@ -1975,7 +2196,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   title={`Preview: ${colorRanges[band] || "#ff0000"}`}
                 />
 
-                {/* Color Picker */}
+              
                 <input
                   type="color"
                   value={colorRanges[band] || "#ff0000"}
@@ -1997,7 +2218,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   }}
                 />
 
-                {/* Remove Button */}
+           
                 <button
                   className="btn-remove"
                   title="Remove band"
@@ -2021,352 +2242,279 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               </div>
             ))}
           </div>
-        )}
+        )} */}
 
         {/* === Filter Button (Band + Multi Column) === */}
-        <div style={{ marginTop: "12px", position: "relative" }}>
-          <button
-            type="button"
-            className="btn-filter"
-            onClick={async () => {
-              const newState = !isFilterOpen;
-              setIsFilterOpen(newState);
+<div style={{ marginTop: "12px", position: "relative" }}>
+  <button
+    type="button"
+    className="btn-filter"
+    onClick={() => {
+      const newState = !isFilterOpen;
+      setIsFilterOpen(newState);
 
-              if (newState) {
-                if (filters.length === 0) {
-                  setFilters([{ column: "", values: [] }]); // start with 1 filter row
-                }
+      if (newState) {
+        // Initialize one filter row if empty
+        if (filters.length === 0) {
+          setFilters([{ column: "", values: [] }]);
+        }
 
-                try {
-                  // ✅ Determine correct active table
-                  const activeTable =
-                    (targetConfigs.length > 0 && targetConfigs[0].table) ||
-                    kpiSource.table ||
-                    phdbTable;
+        // ✅ MERGE source + target columns (NO API CALL)
+        const sourceCols = Array.isArray(columns) ? columns : [];
+        const targetCols = Array.isArray(targetConfigs)
+          ? targetConfigs.flatMap((c) => c.columns || [])
+          : [];
 
-                  if (!activeTable) throw new Error("No active table selected");
+        const mergedCols = Array.from(
+          new Set([...sourceCols, ...targetCols])
+        ).sort((a, b) => a.localeCompare(b));
 
-                  const url = `${getApiBaseUrl()}/columns/${encodeURIComponent(activeTable)}`;
-                  console.log("📡 Fetching columns from:", url);
+        setAvailableColumns(mergedCols);
+      }
+    }}
+    style={{
+      color: "#000",
+      marginTop: "6px",
+      padding: "6px 14px",
+      borderRadius: "20px",
+      border: "1px solid #ccc",
+      background: "#f9f9f9",
+      cursor: "pointer",
+      fontWeight: "bold",
+    }}
+  >
+    Filter ▾
+  </button>
 
-                  const res = await fetch(url);
-                  if (!res.ok)
-                    throw new Error(`Failed to fetch columns: ${res.status}`);
-                  let cols = await res.json();
+  {isFilterOpen && (
+    <div
+      style={{
+        color: "#000",
+        position: "absolute",
+        top: "100%",
+        left: 0,
+        width: "320px",
+        marginTop: "6px",
+        border: "1px solid #ccc",
+        borderRadius: "8px",
+        background: "#fff",
+        padding: "12px",
+        zIndex: 2000,
+      }}
+    >
+      {/* === Band Multi-Select === */}
+      <div style={{ marginBottom: "16px" }}>
+        <label style={{ fontWeight: "bold" }}>Filter by Band</label>
+        <input
+          type="text"
+          placeholder="Search band..."
+          value={searchBand || ""}
+          onChange={(e) => setSearchBand(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "6px",
+            marginTop: "6px",
+            marginBottom: "4px",
+            borderRadius: "4px",
+            border: "1px solid #ccc",
+          }}
+        />
 
-                  // ✅ Ensure array format
-                  if (!Array.isArray(cols)) cols = [];
-
-                  // ✅ Add fallback important columns
-                  const fallbackCols = [
-                  ]
-                  fallbackCols.forEach((c) => {
-                    if (!cols.includes(c)) cols.push(c);
-                  });
-
-                  setAvailableColumns(cols);
-                } catch (err) {
-                  console.error("❌ Failed to fetch columns:", err);
-                  setAvailableColumns([" "]); // fallback
-                }
-              }
-            }}
-            style={{
-              color: "#000",
-              marginTop: "6px",
-              padding: "6px 14px",
-              borderRadius: "20px",
-              border: "1px solid #ccc",
-              background: "#f9f9f9",
-              cursor: "pointer",
-              fontWeight: "bold",
-            }}
-          >
-            Filter ▾
-          </button>
-
-          {isFilterOpen && (
-            <div
-              style={{
-                color: "#000",
-                position: "absolute",
-                top: "100%",
-                left: 0,
-                width: "320px",
-                marginTop: "6px",
-                border: "1px solid #ccc",
-                borderRadius: "8px",
-                background: "#fff",
-                padding: "12px",
-                zIndex: 2000,
-              }}
-            >
-              {/* === Band Multi-Select with Search === */}
-              <div style={{ marginBottom: "16px" }}>
-                <label style={{ fontWeight: "bold", color: "#000" }}>
-                  Filter by Band
-                </label>
-                <input
-                  type="text"
-                  placeholder="Search band..."
-                  value={searchBand || ""}
-                  onChange={(e) => setSearchBand(e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "6px",
-                    marginTop: "6px",
-                    marginBottom: "4px",
-                    borderRadius: "4px",
-                    border: "1px solid #ccc",
-                  }}
-                />
+        <div
+          style={{
+            maxHeight: "150px",
+            overflowY: "auto",
+            border: "1px solid #ccc",
+            borderRadius: "6px",
+            padding: "4px",
+          }}
+        >
+          {Array.from(new Set((bandCellOptions || []).map((b) => b.band)))
+            .filter(Boolean)
+            .filter((band) =>
+              band.toLowerCase().includes((searchBand || "").toLowerCase())
+            )
+            .sort((a, b) => {
+              const numA = parseInt(String(a).replace(/\D/g, ""), 10) || 0;
+              const numB = parseInt(String(b).replace(/\D/g, ""), 10) || 0;
+              return numB - numA;
+            })
+            .map((band) => {
+              const checked = selectedUniqueBands?.includes(band);
+              return (
                 <div
-                  style={{
-                    maxHeight: "150px",
-                    overflowY: "auto",
-                    border: "1px solid #ccc",
-                    borderRadius: "6px",
-                    padding: "4px",
+                  key={band}
+                  style={{ display: "flex", alignItems: "center", cursor: "pointer" }}
+                  onClick={() => {
+                    const newBands = checked
+                      ? selectedUniqueBands.filter((b) => b !== band)
+                      : [...(selectedUniqueBands || []), band];
+                    setSelectedUniqueBands(newBands);
+                    window.applyBandFilter?.(newBands);
                   }}
                 >
-                  {Array.from(
-                    new Set((bandCellOptions || []).map((b) => b.band)),
-                  )
-                    .filter(Boolean)
-                    .filter((band) =>
-                      band
-                        .toLowerCase()
-                        .includes((searchBand || "").toLowerCase()),
-                    )
-                    .sort((a, b) => {
-                      const numA =
-                        parseInt(String(a || "").replace(/\D/g, ""), 10) || 0;
-                      const numB =
-                        parseInt(String(b || "").replace(/\D/g, ""), 10) || 0;
-                      return numB - numA;
-                    })
-                    .map((band) => {
-                      const checked = selectedUniqueBands?.includes(band);
-                      return (
-                        <div
-                          key={band}
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            cursor: "pointer",
-                            padding: "4px 0",
-                          }}
-                          onClick={() => {
-                            const newBands = checked
-                              ? selectedUniqueBands.filter((b) => b !== band)
-                              : [...(selectedUniqueBands || []), band];
-                            setSelectedUniqueBands(newBands);
-                            window.applyBandFilter?.(newBands);
-                          }}
-                        >
-                          <input type="checkbox" checked={checked} readOnly />
-                          <span style={{ marginLeft: "6px" }}>{band}</span>
-                        </div>
-                      );
-                    })}
+                  <input type="checkbox" checked={checked} readOnly />
+                  <span style={{ marginLeft: 6 }}>{band}</span>
                 </div>
-              </div>
+              );
+            })}
+        </div>
+      </div>
 
-              {/* === Column Filters with Search === */}
-              {filters.map((filter, idx) => (
-                <div key={idx} style={{ marginBottom: "16px" }}>
-                  {/* Column Dropdown */}
-                  <select
-                    value={filter.column || ""}
-                    onChange={async (e) => {
-                      const col = e.target.value;
-                      if (!col) return;
+      {/* === Column Filters === */}
+      {filters.map((filter, idx) => (
+        <div
+          key={idx}
+          style={{
+            marginBottom: "14px",
+            borderBottom: "1px dashed #ddd",
+            paddingBottom: "10px",
+          }}
+        >
+          {/* Column + Remove */}
+          <div style={{ display: "flex", gap: "6px" }}>
+            <select
+              value={filter.column || ""}
+              onChange={async (e) => {
+                const col = e.target.value;
+                if (!col) return;
 
-                      if (!availableValues[col]) {
-                        try {
-                          // ✅ Proper encoding & API base handling
-                          const encodedTable = encodeURIComponent(phdbTable);
-                          const encodedCol = encodeURIComponent(col);
-                          const apiUrl = `${getApiBaseUrl()}/distinct-values/${encodedTable}?col=${encodedCol}`;
+                if (!availableValues[col]) {
+                  try {
+                    const encodedTable = encodeURIComponent(
+                      targetConfigs[0]?.table || kpiSource.table || phdbTable
+                    );
+                    const apiUrl = appendDateParams(
+                      `${getApiBaseUrl()}/distinct-values/${encodedTable}?col=${encodeURIComponent(
+                        col
+                      )}`
+                    );
 
-                          console.log("📡 Fetching distinct values:", apiUrl);
+                    const res = await fetch(apiUrl);
+                    const vals = await res.json();
 
-                          const res = await fetch(apiUrl);
-                          if (!res.ok)
-                            throw new Error(
-                              `Failed to fetch distinct values for ${col}`,
-                            );
+                    setAvailableValues((prev) => ({
+                      ...prev,
+                      [col]: Array.isArray(vals) ? vals : [],
+                    }));
+                  } catch {
+                    setAvailableValues((prev) => ({ ...prev, [col]: [] }));
+                  }
+                }
 
-                          const vals = await res.json();
-                          setAvailableValues((prev) => ({
-                            ...prev,
-                            [col]: Array.isArray(vals) ? vals : [],
-                          }));
-                        } catch (err) {
-                          console.error(
-                            "❌ Failed to fetch values for column:",
-                            col,
-                            err,
-                          );
-                          setAvailableValues((prev) => ({
-                            ...prev,
-                            [col]: [],
-                          }));
-                        }
-                      }
-
-                      const updated = [...filters];
-                      updated[idx] = { column: col, values: [] };
-                      setFilters(updated);
-
-                      const newSelectedColumns = {};
-                      updated.forEach((f) => {
-                        if (f.column && f.values.length > 0) {
-                          newSelectedColumns[f.column] = f.values;
-                        }
-                      });
-                      setSelectedColumnValues(newSelectedColumns);
-                    }}
-                    style={{
-                      width: "100%",
-                      marginBottom: "6px",
-                      padding: "6px",
-                      borderRadius: "6px",
-                      border: "1px solid #ccc",
-                    }}
-                  >
-                    <option value="">Select a column</option>
-                    {availableColumns.map((col) => (
-                      <option key={col} value={col}>
-                        {col}
-                      </option>
-                    ))}
-                  </select>
-
-                  {/* Values Multi-Select with Search */}
-                  {filter.column &&
-                    Array.isArray(availableValues[filter.column]) && (
-                      <>
-                        <input
-                          type="text"
-                          placeholder={`Search ${filter.column}...`}
-                          value={searchTerms[filter.column] || ""}
-                          onChange={(e) =>
-                            setSearchTerms({
-                              ...searchTerms,
-                              [filter.column]: e.target.value,
-                            })
-                          }
-                          style={{
-                            width: "100%",
-                            padding: "6px",
-                            marginBottom: "4px",
-                            borderRadius: "4px",
-                            border: "1px solid #ccc",
-                          }}
-                        />
-                        <div
-                          style={{
-                            border: "1px solid #ccc",
-                            borderRadius: "6px",
-                            maxHeight: "120px",
-                            overflowY: "auto",
-                            padding: "4px",
-                          }}
-                        >
-                          {availableValues[filter.column]
-                            .filter((val) =>
-                              val
-                                ?.toString()
-                                .toLowerCase()
-                                .includes(
-                                  (
-                                    searchTerms[filter.column] || ""
-                                  ).toLowerCase(),
-                                ),
-                            )
-                            .map((val) => {
-                              const checked = filter.values.includes(val);
-                              return (
-                                <div
-                                  key={val}
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    cursor: "pointer",
-                                  }}
-                                  onClick={() => {
-                                    const updated = [...filters];
-                                    const newValues = checked
-                                      ? filter.values.filter((v) => v !== val)
-                                      : [...filter.values, val];
-                                    updated[idx] = {
-                                      ...filter,
-                                      values: newValues,
-                                    };
-                                    setFilters(updated);
-
-                                    const newSelectedColumns = {};
-                                    updated.forEach((f) => {
-                                      if (f.column && f.values.length > 0) {
-                                        newSelectedColumns[f.column] = f.values;
-                                      }
-                                    });
-                                    setSelectedColumnValues(newSelectedColumns);
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={checked}
-                                    readOnly
-                                  />
-                                  <span style={{ marginLeft: "6px" }}>
-                                    {val}
-                                  </span>
-                                </div>
-                              );
-                            })}
-                        </div>
-                      </>
-                    )}
-                </div>
+                const updated = [...filters];
+                updated[idx] = { column: col, values: [] };
+                setFilters(updated);
+                setSelectedColumnValues({});
+              }}
+              style={{
+                flex: 1,
+                padding: "6px",
+                borderRadius: "6px",
+                border: "1px solid #ccc",
+              }}
+            >
+              <option value="">Select column</option>
+              {availableColumns.map((col) => (
+                <option key={col} value={col}>
+                  {col}
+                </option>
               ))}
+            </select>
 
-              {/* === Add Filter Row Button === */}
-              <button
-                type="button"
-                onClick={() => {
-                  const updatedFilters = [
-                    ...filters,
-                    { column: "", values: [] },
-                  ];
-                  setFilters(updatedFilters);
+            {/* ❌ REMOVE FILTER BUTTON */}
+            <button
+              title="Remove filter"
+              onClick={() => {
+                const updated = filters.filter((_, i) => i !== idx);
+                setFilters(updated);
 
-                  const newSelectedColumns = {};
-                  updatedFilters.forEach((f) => {
-                    if (f.column && f.values.length > 0) {
-                      newSelectedColumns[f.column] = f.values;
-                    }
-                  });
-                  setSelectedColumnValues(newSelectedColumns);
-                }}
+                const newSelected = {};
+                updated.forEach((f) => {
+                  if (f.column && f.values.length) {
+                    newSelected[f.column] = f.values;
+                  }
+                });
+                setSelectedColumnValues(newSelected);
+              }}
+              style={{
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                fontSize: "18px",
+                color: "#d11a2a",
+              }}
+            >
+              ❌
+            </button>
+          </div>
+
+          {/* Values */}
+          {filter.column &&
+            Array.isArray(availableValues[filter.column]) && (
+              <div
                 style={{
-                  color: "#fff",
-                  width: "40%",
-                  padding: "6px",
+                  marginTop: "6px",
+                  maxHeight: "120px",
+                  overflowY: "auto",
+                  border: "1px solid #ccc",
                   borderRadius: "6px",
-                  border: "1px dashed #ccc",
-                  background: "#1e6e03",
-                  cursor: "pointer",
-                  fontWeight: "bold",
-                  marginTop: "8px",
+                  padding: "4px",
                 }}
               >
-                + Add Filter
-              </button>
-            </div>
-          )}
+                {availableValues[filter.column].map((val) => {
+                  const checked = filter.values.includes(val);
+                  return (
+                    <div
+                      key={val}
+                      style={{ display: "flex", cursor: "pointer" }}
+                      onClick={() => {
+                        const updated = [...filters];
+                        const newVals = checked
+                          ? filter.values.filter((v) => v !== val)
+                          : [...filter.values, val];
+                        updated[idx] = { ...filter, values: newVals };
+                        setFilters(updated);
+
+                        const map = {};
+                        updated.forEach((f) => {
+                          if (f.column && f.values.length) {
+                            map[f.column] = f.values;
+                          }
+                        });
+                        setSelectedColumnValues(map);
+                      }}
+                    >
+                      <input type="checkbox" checked={checked} readOnly />
+                      <span style={{ marginLeft: 6 }}>{val}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
         </div>
+      ))}
+
+      {/* === Add Filter Row === */}
+      <button
+        type="button"
+        onClick={() => setFilters([...filters, { column: "", values: [] }])}
+        style={{
+          width: "100%",
+          padding: "6px",
+          borderRadius: "6px",
+          background: "#1e6e03",
+          color: "#fff",
+          border: "none",
+          fontWeight: "bold",
+          cursor: "pointer",
+        }}
+      >
+        + Add Filter
+      </button>
+    </div>
+  )}
+</div>
 
         {/* === Optional: Watch all filters for debugging === */}
 
@@ -2423,9 +2571,11 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               }, 100);
 
               fetch(
-                `${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(
-                  selected,
-                )}`,
+                `${
+                  import.meta.env.VITE_API_URL
+                }/drive-test/column-range?column=${encodeURIComponent(
+                  selected
+                )}`
               )
                 .then((res) => res.json())
                 .then(({ min, max }) => {
@@ -2448,7 +2598,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                       // ✅ Immediately trigger drive test layer redraw
                       window.refreshDriveTestLayer?.(
                         selected,
-                        newRanges[selected],
+                        newRanges[selected]
                       );
 
                       return newRanges;
@@ -2472,7 +2622,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                   // Still refresh visuals
                   window.refreshDriveTestLayer?.();
                 });
-            },
+            }
           )}
 
           {/* === Range Info === */}
@@ -2578,7 +2728,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                       ❌
                     </button>
                   </div>
-                ),
+                )
               )}
 
               {/* === Add New Color Band === */}
@@ -2720,20 +2870,32 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
               if (kpiSource.type === "file") {
                 // ✅ Case 1: KPI comes from uploaded file
                 const res = await fetch(
-                  `${import.meta.env.VITE_API_URL}/grid-map/column-range?column=${encodeURIComponent(selected)}&table=${phdbTable || ""}`,
+                  appendDateParams(
+                    `${getApiBaseUrl()}/grid-map/column-range?column=${encodeURIComponent(
+                      selected
+                    )}&table=${encodeURIComponent(phdbTable || "")}`
+                  )
                 );
                 ({ min, max } = await res.json());
               } else if (kpiSource.type === "target" && kpiSource.table) {
                 // ✅ Case 2: KPI comes from selected target table
                 // 1) Fetch range
                 const resRange = await fetch(
-                  `${import.meta.env.VITE_API_URL}/grid-map/column-range?column=${encodeURIComponent(selected)}&table=${encodeURIComponent(kpiSource.table)}`,
+                  `${
+                    import.meta.env.VITE_API_URL
+                  }/grid-map/column-range?column=${encodeURIComponent(
+                    selected
+                  )}&table=${encodeURIComponent(kpiSource.table)}`
                 );
                 ({ min, max } = await resRange.json());
 
                 // 2) Fetch GeoJSON rows for this table
                 const resData = await fetch(
-                  `${import.meta.env.VITE_API_URL}/grid-map/data?table=${encodeURIComponent(kpiSource.table)}`,
+                  appendDateParams(
+                    `${getApiBaseUrl()}/grid-map/data?table=${encodeURIComponent(
+                      kpiSource.table
+                    )}`
+                  )
                 );
                 const geojson = await resData.json();
                 if (geojson?.features) {
@@ -2774,7 +2936,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                 setGridKpiProgress(0);
               }, 500);
             }
-          },
+          }
         )}
 
         {/* === Show KPI Source Info === */}
@@ -2893,7 +3055,7 @@ fetch(`${import.meta.env.VITE_API_URL}/projects`)
                     ❌
                   </button>
                 </div>
-              ),
+              )
             )}
 
             {/* === Add New Color Band === */}
