@@ -216,6 +216,33 @@ const createSectorPolygonFeature = (
   return turf.feature(turf.polygon([[...outer, ...inner, outer[0]]]).geometry);
 };
 
+
+  const generateColors = (values) => {
+    const colors = {};
+    const step = 360 / values.length;
+    values.forEach((val, i) => {
+      colors[val] = `hsl(${Math.round(i * step)},70%,50%)`;
+    });
+    return colors;
+  };
+  
+  const buildMatchExpression = (geojson) => {
+    const zones = [...new Set(geojson.features.map(f => f.properties.B4_Polygon))];
+    const colors = generateColors(zones);
+    const expression = ['match', ['get', 'B4_Polygon']];
+    zones.forEach(zone => {
+      expression.push(zone, colors[zone]);
+    });
+    expression.push('#cccccc');
+    return expression;
+  };
+
+
+
+
+
+
+
 /* ---------------- Component ---------------- */
 
 const MapRenderer = ({
@@ -723,60 +750,88 @@ const findRepresentativeCell = (props, geojsonData) => {
       }
       // ⭐ ADD THIS: Global polygon loader for uploaded ZIP shapefile
       window.loadPolygonLayer = function (geojson) {
-        console.log("🌍 Loading custom polygon layer...", geojson);
+      console.log("🌍 Loading custom polygon layer...", geojson);
 
-        const map = mapInstance.current;
-        if (!map) {
-          console.error("❌ Map not ready");
-          return;
-        }
+      const map = mapInstance.current;
+      if (!map) {
+        console.error("❌ Map instance is not ready.");
+        return;
+      }
 
-        // Remove old layer/source if present
-        if (map.getLayer("custom-polygon-fill"))
-          map.removeLayer("custom-polygon-fill");
-        if (map.getLayer("custom-polygon-outline"))
-          map.removeLayer("custom-polygon-outline");
-        if (map.getSource("custom-polygon-source"))
-          map.removeSource("custom-polygon-source");
+      // Remove old layers and sources if they exist
+      if (map.getLayer("custom-polygon-fill")) {
+        map.removeLayer("custom-polygon-fill");
+      }
+      if (map.getLayer("custom-polygon-outline")) {
+        map.removeLayer("custom-polygon-outline");
+      }
+      if (map.getSource("custom-polygon-source")) {
+        map.removeSource("custom-polygon-source");
+      }
 
-        // Add fresh source
-        map.addSource("custom-polygon-source", {
-          type: "geojson",
-          data: geojson,
-        });
+      // Add a new GeoJSON source
+      map.addSource("custom-polygon-source", {
+        type: "geojson",
+        data: geojson,
+      });
 
-        // Fill layer
+      // Verify GeoJSON source
+      const source = map.getSource("custom-polygon-source");
+      if (source) {
+        console.log("✅ GeoJSON source loaded:", source._data);
+      } else {
+        console.error("❌ GeoJSON source not found.");
+        return;
+      }
+
+      // Inspect GeoJSON features
+      geojson.features.forEach((feature) => {
+        console.log("Feature Geometry:", feature.geometry);
+        console.log("Feature Properties:", feature.properties);
+      });
+
+      const fillColorExpression = buildMatchExpression(geojson);
+
+      // Add the fill layer with static color
+      try {
         map.addLayer({
           id: "custom-polygon-fill",
           type: "fill",
           source: "custom-polygon-source",
           paint: {
-            "fill-color": "#0080ff",
-            "fill-opacity": 0.25,
+            "fill-color": fillColorExpression,
+            "fill-opacity": 0.8, 
           },
         });
+        console.log("✅ Fill layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding fill layer:", error);
+      }
 
-        // Outline layer
+      // Add the outline layer
+      try {
         map.addLayer({
           id: "custom-polygon-outline",
           type: "line",
           source: "custom-polygon-source",
           paint: {
-            "line-color": "#0040ff",
+            "line-color": "#ff40ff",
             "line-width": 2,
           },
         });
+        console.log("✅ Outline layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding outline layer:", error);
+      }
 
-        // Auto zoom
-        try {
-          const bbox = turf.bbox(geojson);
-          map.fitBounds(bbox, { padding: 40 });
-        } catch (e) {
-          console.warn("Could not fit polygon bbox:", e);
-        }
-
-        console.log("✅ Custom polygon rendered.");
-      };
+      // Auto zoom to fit the polygon bounds
+      try {
+        const bbox = turf.bbox(geojson); // Calculate bounding box using Turf.js
+        map.fitBounds(bbox, { padding: 40 });
+      } catch (error) {
+        console.warn("⚠️ Could not fit polygon bounding box:", error);
+      }
+    };
 
       // highlighted feature
       if (!map.getLayer("highlighted-feature-layer")) {
