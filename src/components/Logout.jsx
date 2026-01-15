@@ -9,6 +9,6 @@ export const logoutUser = () => {
 };
 
 export const UserProfile = ()=>{
-    window.location.href ="http://localhost:5174/auth/user_profile"
+    window.location.href ="http://localhost:517/auth/user_profile"
 }
 
