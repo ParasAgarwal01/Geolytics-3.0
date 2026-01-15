@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
+import { logoutUser,UserProfile } from "./Logout";
+import { getEnabledFeatures } from "./CookiesUtils";
 
 const Navbar = ({
   activeSubModule,
@@ -65,6 +67,9 @@ const Navbar = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+
+
 
   return (
     <>
@@ -253,8 +258,8 @@ const Navbar = ({
             </button>
             {showProfileMenu && (
               <div className="dropdown-content drop-down" style={{ right: 0 }}>
-                <button>Profile</button>
-                <button>Logout</button>
+                <button onClick={UserProfile}>profile</button>
+                <button onClick={logoutUser}>Logout</button>
               </div>
             )}
           </div>

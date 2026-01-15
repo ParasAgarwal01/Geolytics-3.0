@@ -5,6 +5,14 @@ import mapboxgl from "mapbox-gl";
 import * as turf from "@turf/turf";
 import "mapbox-gl/dist/mapbox-gl.css";
 import "../Styles.css";
+import MapboxDraw from "@mapbox/mapbox-gl-draw";
+import CircleMode from "mapbox-gl-draw-circle-mode";
+import FreehandMode from "mapbox-gl-draw-freehand-mode";
+import Papa from "papaparse";
+import { Pentagon, Pencil, Trash2, Save } from "lucide-react";
+import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
+// import { getEnabledFeatures } from "../Utils/cookieUtils";
+import { getEnabledFeatures, getToken } from "./CookiesUtils";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
@@ -440,6 +448,828 @@ const MapRenderer = ({
   const [selectedSiteIdState, setSelectedSiteIdState] = useState("");
   const [infoSource, setInfoSource] = useState({});
   const [infoTarget, setInfoTarget] = useState({});
+
+  // 🎨 POLYGON DRAWING & SITE DETECTION SECTION
+
+  // --- STATE VARIABLES FOR DRAWING ---
+  const drawRef = useRef(null);                           // MapboxDraw instance
+  const popupRef = useRef(null);                          // Mapbox Popup instance
+  const currentMatchedSitesRef = useRef([]);              // Sites matched in polygon
+  const currentActiveZoneIdRef = useRef(null);            // Current zone ID
+  const isDrawingRef = useRef(false);                     // Is user currently drawing
+  
+  const [isDrawing, setIsDrawing] = useState(false);      // Drawing mode state
+  const [showCountryPopup, setShowCountryPopup] = useState(false);  // Show country selection popup
+  const [pendingMode, setPendingMode] = useState(null);   // Pending draw mode
+  const [polygonCount, setPolygonCount] = useState(0);    // Counter for zone IDs
+  const [selectedCountry, setSelectedCountry] = useState(null);  // Selected country
+
+  const username = getEnabledFeatures()?.first_name || "User";
+
+  // --- COUNTRY COORDINATES FOR MAP FLYTO ---
+  const countryCoordinates = {
+    UK: { coords: [-0.1276, 51.5074], prefix: "UK" },
+    USA: { coords: [-95.7129, 37.0902], prefix: "USA" },
+    India: { coords: [78.9629, 20.5937], prefix: "IND" },
+  };
+
+  // Initialize drawing tools effect
+  useEffect(() => {
+    if (!mapInstance.current) {
+      console.log("⏳ Waiting for mapInstance...");
+      return;
+    }
+
+    const map = mapInstance.current;
+    console.log("🗺️ Map instance available, checking if Draw is needed...");
+
+    // Check if Draw is already initialized
+    if (drawRef.current) {
+      console.log("✅ Draw already initialized");
+      return;
+    }
+
+    // Wait for map to be fully loaded
+    const initDraw = () => {
+      if (drawRef.current) {
+        console.log("✅ Draw already exists, skipping init");
+        return;
+      }
+      initializeDrawingTools(map);
+    };
+
+    if (map.isStyleLoaded()) {
+      console.log("🎯 Map style already loaded, initializing Draw...");
+      initDraw();
+    } else {
+      console.log("⏳ Waiting for map style to load...");
+      map.once("load", initDraw);
+      map.once("style.load", initDraw);
+    }
+
+    return () => {
+      // Cleanup on unmount
+      if (drawRef.current && map.getSource("draw-source")) {
+        // Draw instance already handles its cleanup
+      }
+    };
+  }, [mapInstance]);
+
+  // *** FUNCTION 1: INITIALIZE DRAWING TOOLS ***
+  const initializeDrawingTools = (map) => {
+    if (drawRef.current) {
+      console.log("✅ Draw already initialized, skipping");
+      return;
+    }
+
+    console.log("🔧 Starting Draw initialization...");
+
+    try {
+      const draw = new MapboxDraw({
+        displayControlsDefault: false,
+        controls: {
+          polygon: false,
+          trash: false,
+        },
+        modes: {
+          ...MapboxDraw.modes,
+          draw_circle: CircleMode,
+          draw_freehand: FreehandMode,
+        },
+      });
+
+      // Add to map FIRST
+      map.addControl(draw);
+      console.log("✅ Draw control added to map");
+
+      // THEN set ref
+      drawRef.current = draw;
+      console.log("✅ drawRef.current is now set");
+
+      // Setup event listeners
+      setupDrawingListeners(map, draw);
+      console.log("✅ Event listeners attached");
+
+      // Load existing polygons
+      loadExistingPolygons();
+      console.log("✅ Attempted to load existing polygons");
+    } catch (error) {
+      console.error("❌ Error initializing Draw:", error);
+      drawRef.current = null;
+    }
+  };
+
+  const setupDrawingListeners = (map, draw) => {
+    console.log("🎯 Setting up drawing listeners...");
+
+    // Mode change listener
+    map.on("draw.modechange", (e) => {
+      const mode = draw.getMode();
+      console.log("📍 Drawing mode changed to:", mode);
+      isDrawingRef.current = mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"));
+      
+      // Set cursor when mode changes
+      if (isDrawingRef.current) {
+        const canvas = map.getCanvas();
+        if (canvas) {
+          canvas.style.cursor = "crosshair";
+          console.log("✅ Cursor set to crosshair on mode change");
+        }
+      }
+    });
+
+    // Draw create listener - set zone ID on new polygon
+    map.on("draw.create", (e) => {
+      if (!e.features || e.features.length === 0) return;
+      const feature = e.features[0];
+      if (!feature || !feature.id) return;
+
+      setPolygonCount((prev) => {
+        const countryPrefix = "west";
+        const zoneId = `${countryPrefix}_${prev}_${username}`;
+        draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+        currentActiveZoneIdRef.current = zoneId;
+        return prev + 1;
+      });
+    });
+
+    map.on("draw.update", handleDrawingComplete);
+
+    // Global click handler for CSV and Submit buttons
+    const handleGlobalClick = (e) => {
+      if (e.target.id === "export-csv-btn") {
+        handleExportCSV();
+      }
+      if (e.target.id === "submit-db-btn") {
+        handleSubmitToBackend();
+      }
+    };
+
+    // Map click listener for site detection and polygon clicks
+    map.on("click", handleMapClick);
+
+    // Setup cursor handling for polygon hover
+    setupCursorHandling(map, draw);
+
+    // Right-click or Escape to finish drawing
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && isDrawingRef.current) {
+        console.log("✋ Escape pressed, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    // Right-click context menu - finish drawing
+    const handleContextMenu = (e) => {
+      if (isDrawingRef.current) {
+        e.preventDefault();
+        console.log("✋ Right-click, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    document.addEventListener("click", handleGlobalClick);
+    document.addEventListener("keydown", handleKeyDown);
+    map.getCanvas().addEventListener("contextmenu", handleContextMenu);
+
+    // Cleanup function
+    return () => {
+      document.removeEventListener("click", handleGlobalClick);
+      document.removeEventListener("keydown", handleKeyDown);
+      map.getCanvas().removeEventListener("contextmenu", handleContextMenu);
+    };
+  };
+
+  // *** FUNCTION 3: ACTIVATE TOOL ***
+  // Activates polygon or freehand drawing mode
+  // ❌ COUNTRY POPUP COMMENTED OUT - Direct drawing start
+
+  const activateTool = (mode) => {
+    
+    
+    // ❌ COMMENTED OUT: Country popup check
+    // If country not selected, show popup first
+    // if (!selectedCountry) {
+    //   setPendingMode(mode);
+    //   openCountryPopup();
+    //   return;
+    // }
+
+    // Country already selected, activate directly
+    if (!drawRef.current) {
+      setTimeout(() => {
+        if (drawRef.current) {
+    
+          activateTool(mode);
+        } else {
+          if (mapInstance.current) {
+            console.log("🔧 Force initializing Draw...");
+            initializeDrawingTools(mapInstance.current);
+            setTimeout(() => {
+              activateTool(mode);
+            }, 300);
+          }
+        }
+      }, 500);
+      return;
+    }
+
+    try {
+      drawRef.current.changeMode(mode);
+      
+      // Set cursor immediately and after mode change settles
+      const setCursor = () => {
+        if (mapInstance.current) {
+          const canvas = mapInstance.current.getCanvas();
+          if (canvas) {
+            canvas.style.cursor = "crosshair";
+  
+          }
+        }
+      };
+      
+      setCursor();
+      
+      setTimeout(() => {
+        setCursor();
+      }, 100);
+    } catch (error) {
+      console.error(" Error activating tool:", error);
+    }
+  };
+
+  // *** FUNCTION 4: OPEN COUNTRY POPUP ***
+  // Displays country selection modal for first-time activation
+  const openCountryPopup = () => {
+    console.log("🌍 Opening country selection popup");
+    setShowCountryPopup(true);
+  };
+
+  // *** FUNCTION 5: HANDLE COUNTRY SELECT ***
+  const handleCountrySelect = (country) => {
+    console.log(`📍 Selected country: ${country}`);
+    const { coords, prefix } = countryCoordinates[country];
+    const map = mapInstance.current;
+
+    // Save selected country
+    setSelectedCountry(country);
+
+    if (map) {
+      map.flyTo({
+        center: coords,
+        zoom: 5,
+        duration: 2000,
+      });
+    }
+
+    setShowCountryPopup(false);
+    setTimeout(() => {
+      console.log("🎯 Activating drawing tool now...");
+      activateTool(pendingMode || "draw_polygon");
+    }, 2500);
+  };
+
+  const handleDrawingComplete = () => {
+    console.log("✏️ Drawing completed");
+    if (!drawRef.current) return;
+
+    const data = drawRef.current.getAll();
+    if (data.features.length === 0) return;
+
+    const lastFeature = data.features[data.features.length - 1];
+    console.log("📦 Last drawn feature:", lastFeature);
+
+    // Detect clicked sites within polygon
+    detectClickedSites(lastFeature);
+  };
+
+  // *** FUNCTION 7: DETECT CLICKED SITES ***
+  const detectClickedSites = (polygon) => {
+    // Get site data from geojsonData
+    const sites = geojsonData?.features || [];
+    
+    if (!sites || sites.length === 0) {
+      console.warn("⚠️ No site data available");
+      currentMatchedSitesRef.current = [];
+      showZonePopup(polygon, []);
+      return;
+    }
+
+    const matchedSites = [];
+    sites.forEach((feature) => {
+      try {
+        if (feature && feature.geometry) {
+          let coordinates = null;
+          
+          // Handle Point geometry
+          if (feature.geometry.type === "Point" && feature.geometry.coordinates) {
+            coordinates = feature.geometry.coordinates;
+          }
+          // Handle properties with Lat/Long
+          else if (feature.properties) {
+            const lat = feature.properties.Lat || feature.properties.LATITUDE || feature.properties.latitude;
+            const lon = feature.properties.Long || feature.properties.LONGITUDE || feature.properties.longitude;
+            if (lat != null && lon != null) {
+              coordinates = [lon, lat];
+            }
+          }
+
+          if (coordinates) {
+            const point = turf.point(coordinates);
+            if (turf.booleanPointInPolygon(point, polygon)) {
+              matchedSites.push(feature);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error checking point in polygon:", err);
+      }
+    });
+
+    currentMatchedSitesRef.current = matchedSites;
+    console.log(`🎯 Found ${matchedSites.length} sites in polygon`);
+
+    // Show popup with zone info
+    showZonePopup(polygon, matchedSites);
+  };
+
+  // *** FUNCTION 8: SHOW ZONE POPUP ***
+  const showZonePopup = (polygon, sites) => {
+    const draw = drawRef.current;
+    if (!draw) return;
+
+    // Find or create zone ID
+    let zoneId = currentActiveZoneIdRef.current;
+    if (!zoneId) {
+      const countryPrefix = "UK"; // Default country
+      zoneId = `${countryPrefix}_${polygonCount}_${username}`;
+      currentActiveZoneIdRef.current = zoneId;
+    }
+
+    // Build site list HTML - handle various property names
+    const siteList =
+      sites.length === 0
+        ? "<i style=\"color: #999;\">No sites found</i>"
+        : sites
+            .slice(0, 15)
+            .map((s) => {
+              const props = s.properties || {};
+              const siteName = props.SITENAME || props.sitename || props["SITE NAME"] || props.site_name || props["SITE ID"] || props.site_id || "Unknown Site";
+              return `<div style="padding: 4px 6px; border-bottom: 1px solid #eee; font-size: 11px;">
+                  ${siteName}
+                </div>`;
+            })
+            .join("");
+
+    // Create popup content
+    const popupContent = document.createElement("div");
+    popupContent.innerHTML = `
+      <div style="padding: 12px; font-size: 12px; color: #333; min-width: 240px; max-width: 280px;">
+        <div style="margin-bottom: 8px;">
+          <strong style="font-size: 13px;">Zone ID:</strong><br/>
+          <span style="font-size: 11px; color: #666;">${zoneId}</span>
+        </div>
+        
+        <div style="margin-bottom: 8px; display: flex; gap: 6px;">
+          <button id="export-csv-btn" style="flex: 1; padding: 6px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            📊 Export CSV
+          </button>
+          <button id="submit-db-btn" style="flex: 1; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            💾 Save DB
+          </button>
+        </div>
+
+        <div style="margin-bottom: 6px;">
+          <strong>Total Sites:</strong> <span style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-weight: 600;">${sites.length}</span>
+        </div>
+
+        <div style="margin-bottom: 6px; background: #f9f9f9; border-radius: 4px; max-height: 140px; overflow-y: auto; border: 1px solid #e0e0e0;">
+          ${siteList}
+        </div>
+
+        <div style="font-size: 10px; color: #999; text-align: center; padding-top: 6px; border-top: 1px solid #e0e0e0;">
+          Right-click to close polygon
+        </div>
+      </div>
+    `;
+
+    // Remove old popup
+    if (popupRef.current) {
+      popupRef.current.remove();
+    }
+
+    // Create new popup at polygon center
+    const center = turf.centroid(polygon);
+    popupRef.current = new mapboxgl.Popup({ closeOnClick: true })
+      .setLngLat(center.geometry.coordinates)
+      .setDOMContent(popupContent)
+      .addTo(mapInstance.current);
+
+    // Attach event listeners to buttons
+    setTimeout(() => {
+      const csvBtn = document.getElementById("export-csv-btn");
+      const submitBtn = document.getElementById("submit-db-btn");
+
+      if (csvBtn) {
+        csvBtn.addEventListener("click", handleExportCSV);
+      }
+
+      if (submitBtn) {
+        submitBtn.addEventListener("click", handleSubmitToBackend);
+      }
+    }, 0);
+  };
+
+  const handleMapClick = (e) => {
+    const map = mapInstance.current;
+    const draw = drawRef.current;
+    if (!map || !draw) return;
+
+    // Skip if currently drawing
+    const mode = draw.getMode();
+    if (mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"))) {
+      console.log("⏸ Still drawing, skipping polygon click");
+      return;
+    }
+
+    // Get clicked features from draw layer
+    const ids = draw.getFeatureIdsAt(e.point);
+    if (!ids || ids.length === 0) {
+      console.log(" No polygon clicked");
+      if (popupRef.current) {
+        popupRef.current.remove();
+      }
+      // Reset cursor to default
+      map.getCanvas().style.cursor = "default";
+      return;
+    }
+
+    // Get the clicked feature
+    const feature = draw.get(ids[0]);
+    if (!feature || !feature.geometry || feature.geometry.type !== "Polygon") {
+      console.log(" Clicked feature is not a polygon");
+      return;
+    }
+
+    console.log("✅ Polygon clicked:", feature);
+    map.getCanvas().style.cursor = "pointer";
+    detectClickedSites(feature);
+  };
+
+  // *** FUNCTION 6: SETUP CURSOR HANDLING ***
+  const setupCursorHandling = (map, draw) => {
+    map.on("mousemove", (e) => {
+      const ids = draw.getFeatureIdsAt(e.point);
+      if (ids && ids.length > 0) {
+        // Hovering over polygon
+        map.getCanvas().style.cursor = "pointer";
+      } else if (!isDrawingRef.current) {
+        // Not hovering over polygon and not drawing
+        map.getCanvas().style.cursor = "default";
+      }
+    });
+  };
+
+  // *** FUNCTION 9: HANDLE EXPORT CSV ***
+  
+  const handleExportCSV = () => {
+    if (currentMatchedSitesRef.current.length === 0) {
+      alert("No sites to export");
+      return;
+    }
+
+    try {
+      const csv = Papa.unparse(
+        currentMatchedSitesRef.current.map((s) => s.properties)
+      );
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([csv]));
+      link.download = `${currentActiveZoneIdRef.current}.csv`;
+      link.click();
+      console.log("✅ CSV exported");
+    } catch (error) {
+      console.error("Error exporting CSV:", error);
+      alert("Error exporting CSV");
+    }
+  };
+
+  // *** FUNCTION 10: HANDLE SUBMIT TO BACKEND ***
+ 
+  const handleSubmitToBackend = async () => {
+    const token = getToken();
+    if (!token) {
+      alert("Session expired. Please login again.");
+      window.location.reload();
+      return;
+    }
+
+    const draw = drawRef.current;
+    if (!draw) {
+      alert("Drawing tools not ready");
+      return;
+    }
+
+    const zoneId = currentActiveZoneIdRef.current;
+    const sites = currentMatchedSitesRef.current;
+
+    if (!zoneId) {
+      alert("No zone ID set");
+      return;
+    }
+
+    const allFeatures = draw.getAll().features;
+    const currentPolygon = allFeatures.find((f) => f.properties?.zone_id === zoneId);
+
+    if (!currentPolygon) {
+      alert("Could not find the polygon geometry to save.");
+      return;
+    }
+
+    const payload = {
+      zoneId,
+      country: "UK",
+      site_data: {
+        feature: currentPolygon,
+        matched_sites: sites.map((s) => s.properties),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log(payload, "payload");
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/geolytics/geo-api/polygon/save_polygon",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Token ${token}`,
+          },
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (response.ok) {
+        alert("✅ Polygon and geometry saved successfully");
+      } else {
+        alert("❌ Server error");
+      }
+    } catch (err) {
+      alert("❌ Network error");
+      console.error("Error:", err);
+    }
+  };
+
+  // *** FUNCTION 11: LOAD EXISTING POLYGONS ***
+  const loadExistingPolygons = async () => {
+    const token = getToken();
+    if (!token) {
+      alert("Session expired. Please login again.");
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        "http://127.0.0.1:8000/api/geolytics/geo-api/polygon/user_polygon_list",
+        {
+          headers: { Authorization: `Token ${token}` },
+        }
+      );
+
+      const data = await response.json();
+      console.log(data, "polygons data");
+
+      if (data.success && data.results) {
+        const draw = drawRef.current;
+        if (!draw) return;
+
+        draw.deleteAll();
+
+        const features = data.results
+          .map((item) => {
+            if (item.site_data && item.site_data.feature) {
+              return {
+                ...item.site_data.feature,
+                id: item.id,
+                properties: {
+                  ...item.site_data.feature.properties,
+                  zone_id: item.zone_id,
+                  country: item.country,
+                },
+              };
+            }
+
+            if (Array.isArray(item.site_data) && item.site_data.length > 2) {
+              const points = item.site_data.map((s) => [
+                s.LONGITUDE,
+                s.LATITUDE,
+              ]);
+              if (points[0][0] !== points[points.length - 1][0]) {
+                points.push(points[0]);
+              }
+              return turf.polygon([points], {
+                zone_id: item.zone_id,
+                id: item.id,
+              });
+            }
+
+            return null;
+          })
+          .filter((f) => f !== null);
+
+        draw.add({
+          type: "FeatureCollection",
+          features,
+        });
+
+        console.log("✅ Polygons loaded successfully");
+      } else {
+        console.warn("No polygons found");
+      }
+    } catch (err) {
+      console.error("Error loading polygons:", err);
+      alert("Error loading polygons");
+    }
+  };
+
+
+  // UI COMPONENTS FOR POLYGON DRAWING
+  const drawingUI = (
+    <div style={{
+      position: "absolute",
+      top: "30px",
+      right: "50px",
+      backgroundColor: "white",
+      borderRadius: "8px",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+      padding: "5px",
+      display: "flex",
+      // flexDirection: "column",
+      gap: "4px",
+      zIndex: 10,
+    }}>
+      <button
+        onClick={() => activateTool("draw_polygon")}
+        title="Draw Polygon"
+        style={{
+          padding: "5px",
+          borderRadius: "4px",
+          border: "1px solid #d1d5db",
+          cursor: "pointer",
+          // backgroundColor: "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Pentagon size={15} />
+      </button>
+      <button
+        onClick={() => activateTool("draw_freehand")}
+        title="Draw Freehand"
+        style={{
+          padding: "5px",
+          borderRadius: "4px",
+          border: "1px solid #d1d5db",
+          cursor: "pointer",
+          backgroundColor: "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Pencil size={15} />
+      </button>
+      <button
+        onClick={() => {
+          if (drawRef.current) {
+            drawRef.current.deleteAll();
+            setPolygonCount(0);
+          }
+        }}
+        title="Clear All"
+        style={{
+          padding: "5px",
+          borderRadius: "4px",
+          border: "1px solid #d1d5db",
+          cursor: "pointer",
+          backgroundColor: "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Trash2 size={15} />
+      </button>
+      <button
+        onClick={() => loadExistingPolygons()}
+        title="Load Saved Polygons"
+        style={{
+          padding: "5px",
+          borderRadius: "4px",
+          border: "1px solid #d1d5db",
+          cursor: "pointer",
+          backgroundColor: "#f3f4f6",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <Save size={15} />
+      </button>
+      {selectedCountry && (
+        <button
+          onClick={() => {
+            setSelectedCountry(null);
+            setTimeout(() => openCountryPopup(), 0);
+          }}
+          title="Change Country"
+          style={{
+            padding: "10px 12px",
+            borderRadius: "6px",
+            border: "1px solid #fbbf24",
+            cursor: "pointer",
+            backgroundColor: "#fef3c7",
+            fontSize: "12px",
+            fontWeight: "600",
+            color: "#92400e",
+            transition: "all 0.2s",
+          }}
+          onMouseOver={(e) => e.target.style.backgroundColor = "#fcd34d"}
+          onMouseOut={(e) => e.target.style.backgroundColor = "#fef3c7"}
+        >
+          🌍 {selectedCountry}
+        </button>
+      )}
+    </div>
+  );
+
+  // 🗺️ COUNTRY SELECTION POPUP
+  // Modal that appears when user first clicks polygon/freehand button
+  // Shows UK, USA, India options
+  // On selection: saves country, animates map to coordinates, activates drawing tool
+  // Has "Change Country" button visible in toolbar after selection
+  const countryPopup = showCountryPopup && (
+    <div style={{
+      position: "fixed",
+      top: 0,
+      left: 0,
+      width: "100%",
+      height: "100%",
+      backgroundColor: "rgba(0,0,0,0.5)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1000,
+    }}>
+      <div style={{
+        backgroundColor: "white",
+        borderRadius: "8px",
+        padding: "24px",
+        maxWidth: "400px",
+        boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+      }}>
+        <h2 style={{ marginTop: 0, marginBottom: "16px" }}>Select Country</h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {Object.keys(countryCoordinates).map((country) => (
+            <button
+              key={country}
+              onClick={() => handleCountrySelect(country)}
+              style={{
+                padding: "12px",
+                backgroundColor: "#3b82f6",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              {country}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={() => setShowCountryPopup(false)}
+          style={{
+            marginTop: "12px",
+            padding: "8px",
+            backgroundColor: "#ef4444",
+            color: "white",
+            border: "none",
+            borderRadius: "4px",
+            cursor: "pointer",
+            width: "100%",
+            fontSize: "12px",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
   const rebuildMapSourcesAndLayers = () => {
     console.log("🟠 rebuildMapSourcesAndLayers() called");
 
@@ -823,6 +1653,51 @@ const findRepresentativeCell = (props, geojsonData) => {
       } catch (error) {
         console.error(" Error adding outline layer:", error);
       }
+
+      useEffect(() => {
+        if (!mapInstance.current || drawRef.current) return;
+
+        const draw = new MapboxDraw({
+          displayControlsDefault: false,
+          userProperties: true,
+          modes: {
+            ...MapboxDraw.modes,
+            draw_circle: CircleMode,
+            draw_freehand: FreehandMode,
+          },
+          styles: [
+            // Default Mapbox Draw styles or custom styles here
+            {
+              id: 'gl-draw-polygon-fill-inactive',
+              type: 'fill',
+              filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
+              paint: { 'fill-color': '#3bb2d0', 'fill-opacity': 0.2 }
+            },
+            {
+              id: 'gl-draw-polygon-stroke-active',
+              type: 'line',
+              filter: ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
+              paint: { 'line-color': '#fbb03b', 'line-dasharray': [0.2, 2], 'line-width': 2 }
+            }
+          ]
+        });
+
+        mapInstance.current.addControl(draw);
+        drawRef.current = draw;
+
+        // Event Listeners
+        mapInstance.current.on('draw.create', handleDrawCreate);
+        mapInstance.current.on('draw.modechange', (e) => {
+          setIsDrawing(e.mode !== 'simple_select');
+        });
+
+        return () => {
+          if (mapInstance.current && drawRef.current) {
+            mapInstance.current.removeControl(drawRef.current);
+          }
+        };
+      }, [mapInstance.current]);
+
 
       // Auto zoom to fit the polygon bounds
       try {
@@ -2899,6 +3774,10 @@ setShowInfoPanel(true);
 
   return (
     <>
+      {/* Drawing UI */}
+      {drawingUI}
+      {countryPopup}
+      
       {/* 🔍 Search + Band Expander Toggle (top-right offset) */}
       <div
         style={{
