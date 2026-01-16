@@ -690,7 +690,8 @@ const Sidebar = ({
   // Fetch tables and templates on mount
   // ✅ NEW (fetching /projects instead of /tables)
   useEffect(() => {
-    if (!selectedDatabase) {
+    if (!selectedDatabase) {       
+
       console.log("⏸️ No database selected yet, skipping project fetch...");
       return;
     }

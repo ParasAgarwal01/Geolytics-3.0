@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
 import { logoutUser,UserProfile } from "./Logout";
-import { getEnabledFeatures } from "./CookiesUtils";
+import { checkCookieExpiration } from "./CookiesUtils";
 
 const Navbar = ({
   activeSubModule,
@@ -12,9 +12,15 @@ const Navbar = ({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [subModulePosition, setSubModulePosition] = useState("down");
   const [dbList, setDbList] = useState([]);
+  const [selected, setSelected] = useState('Select Project');
+  
 
   const subModuleBtnRef = useRef(null);
   const subModuleMenuRef = useRef(null);
+
+  const select_db = checkCookieExpiration().userData.project_codes || [];
+
+  
 
   // 🔹 Fetch all databases from backend
   useEffect(() => {
@@ -206,11 +212,41 @@ const Navbar = ({
               ref={subModuleBtnRef}
               className="dropdown-btn"
               onClick={() => setShowSubModuleMenu((prev) => !prev)}
+              // onClick={handleSelectDb}
             >
-              {selectedProject || "Select DB"} <span>▾</span>
-            </button>
-
+              {selectedProject || "Select Project"} <span>▾</span>
+            </button>onClick={() => {
+                        setActiveSubModule(db);
+                        setSelectedProject(db);
+                        setShowSubModuleMenu(false);
+                      }}
             {showSubModuleMenu && (
+            <div ref={subModuleMenuRef}
+                className={`dropdown-content ${
+                  subModulePosition === "up" ? "drop-up" : "drop-down"
+                }`}
+                >
+                    {select_db.map((db) => (     
+                      <button
+                        key={db}
+                        className={
+                        db === selectedProject
+                          ? "dropdown-btn active"
+                          : "dropdown-btn"
+                      }
+                        onClick={() => {
+                        setActiveSubModule(db);
+                        setSelectedProject(db);
+                        setShowSubModuleMenu(false);
+                      }}
+                      >
+                        {db}
+                      </button>
+                    ))}
+                  </div>
+                )}             
+            
+              {/* {showSubModuleMenu && (
               <div
                 ref={subModuleMenuRef}
                 className={`dropdown-content ${
@@ -239,7 +275,9 @@ const Navbar = ({
                   <button disabled>Loading...</button>
                 )}
               </div>
-            )}
+            )}   */}
+
+                   
           </div>
 
           {/* Settings */}

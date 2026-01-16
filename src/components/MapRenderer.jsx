@@ -12,7 +12,8 @@ import Papa from "papaparse";
 import { Pentagon, Pencil, Trash2, Save } from "lucide-react";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 // import { getEnabledFeatures } from "../Utils/cookieUtils";
-import { getEnabledFeatures, getToken } from "./CookiesUtils";
+import {getToken, checkCookieExpiration } from "./CookiesUtils";
+import { redirectToLogin } from "./Logout";
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
@@ -337,6 +338,11 @@ const MapRenderer = ({
     return s;
   };
 
+
+  useEffect(() => {
+    checkCookieExpiration();
+  }, []);
+
   // ⭐ Force legend dropdown to switch when table changes
   useEffect(() => {
     const type = (tableType || "").toLowerCase();
@@ -464,7 +470,7 @@ const MapRenderer = ({
   const [polygonCount, setPolygonCount] = useState(0);    // Counter for zone IDs
   const [selectedCountry, setSelectedCountry] = useState(null);  // Selected country
 
-  const username = getEnabledFeatures()?.first_name || "User";
+  const username = checkCookieExpiration().userData?.first_name || "User";
 
   // --- COUNTRY COORDINATES FOR MAP FLYTO ---
   const countryCoordinates = {
@@ -956,10 +962,10 @@ const MapRenderer = ({
   // *** FUNCTION 10: HANDLE SUBMIT TO BACKEND ***
  
   const handleSubmitToBackend = async () => {
-    const token = getToken();
+    const token = checkCookieExpiration().userData.token
     if (!token) {
-      alert("Session expired. Please login again.");
-      window.location.reload();
+      alert("❌ Session expired. Please login again.");
+      redirectToLogin();
       return;
     }
 
@@ -1023,7 +1029,7 @@ const MapRenderer = ({
 
   // *** FUNCTION 11: LOAD EXISTING POLYGONS ***
   const loadExistingPolygons = async () => {
-    const token = getToken();
+    const token = checkCookieExpiration().userData.token
     if (!token) {
       alert("Session expired. Please login again.");
       return;
@@ -1889,6 +1895,7 @@ setShowInfoPanel(true);
       if (map.getSource("sectors")) map.getSource("sectors").setData(empty);
       return;
     }
+    
 
     const features = geojsonData.features;
     const tableTypeLower = (tableType || "").toLowerCase();
@@ -1898,6 +1905,7 @@ setShowInfoPanel(true);
     const isCmRemarks =
       tableTypeLower.includes("cm change") &&
       cmColorColumn.trim().toLowerCase() === "remarks";
+      
 
     // 0) Precompute CM buckets (global) if needed (ONLY when NOT remarks mode)
     let cmBands = cmLegend && cmLegend.length ? cmLegend : null;
