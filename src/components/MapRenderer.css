@@ -9,3 +9,66 @@
   width: 175%;
   height: 100%;
 }
+
+
+
+
+/* Popup container */
+/* Popup container */
+.drawing-ui-popup {
+  position: absolute;
+  right: 100%;                 /* LEFT side popup */
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 8px;
+
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+
+  padding: 10px;               /* ✅ 10px spacing */
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+
+  display: grid;               /* ✅ GRID layout */
+  grid-template-columns: repeat(4, 32px); /* 4 icons per row */
+  gap: 10px;                   /* ✅ 10px gap */
+}
+
+/* Icon buttons (same pentagon size) */
+.menu-item-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background-color: #f9fafb;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.menu-item-btn:hover {
+  background-color: #f3f4f6;
+  border-color: #9ca3af;
+}
+
+/* Country button goes to NEXT ROW full width */
+.country-btn {
+  grid-column: 1 / -1;         /* full row */
+  height: 32px;
+  padding: 0 12px;
+
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+
+
+

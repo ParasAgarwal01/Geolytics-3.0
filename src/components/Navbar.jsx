@@ -1,4 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
+import { logoutUser,UserProfile } from "./Logout";
+import { checkCookieExpiration } from "./CookiesUtils";
+import { useNavigate } from 'react-router-dom';
 
 const Navbar = ({
   activeSubModule,
@@ -10,10 +13,16 @@ const Navbar = ({
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [subModulePosition, setSubModulePosition] = useState("down");
   const [dbList, setDbList] = useState([]);
+  const [selected, setSelected] = useState('Select Project');
+  
 
   const subModuleBtnRef = useRef(null);
   const subModuleMenuRef = useRef(null);
 
+  const select_db = checkCookieExpiration().userData.project_codes || [];
+   
+  
+  const navigate = useNavigate();
   // 🔹 Fetch all databases from backend
   useEffect(() => {
     const fetchDatabases = async () => {
@@ -65,6 +74,9 @@ const Navbar = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+
+
 
   return (
     <>
@@ -201,11 +213,37 @@ const Navbar = ({
               ref={subModuleBtnRef}
               className="dropdown-btn"
               onClick={() => setShowSubModuleMenu((prev) => !prev)}
+              // onClick={handleSelectDb}
             >
-              {selectedProject || "Select DB"} <span>▾</span>
+              {selectedProject || "Select Project"} <span>▾</span>
             </button>
-
             {showSubModuleMenu && (
+            <div ref={subModuleMenuRef}
+                className={`dropdown-content ${
+                  subModulePosition === "up" ? "drop-up" : "drop-down"
+                }`}
+                >
+                    {select_db.map((db) => (     
+                      <button
+                        key={db}
+                        className={
+                        db === selectedProject
+                          ? "dropdown-btn active"
+                          : "dropdown-btn"
+                      }
+                        onClick={() => {
+                        setActiveSubModule(db);
+                        setSelectedProject(db);
+                        setShowSubModuleMenu(false);
+                      }}
+                      >
+                        {db}
+                      </button>
+                    ))}
+                  </div>
+                )}             
+            
+              {/* {showSubModuleMenu && (
               <div
                 ref={subModuleMenuRef}
                 className={`dropdown-content ${
@@ -234,7 +272,9 @@ const Navbar = ({
                   <button disabled>Loading...</button>
                 )}
               </div>
-            )}
+            )}   */}
+
+                   
           </div>
 
           {/* Settings */}
@@ -253,8 +293,9 @@ const Navbar = ({
             </button>
             {showProfileMenu && (
               <div className="dropdown-content drop-down" style={{ right: 0 }}>
-                <button>Profile</button>
-                <button>Logout</button>
+                <button onClick={() => navigate('/user_profile')}>profile</button>
+                {/* <button onClick={logoutUser}>Logout</button> */}
+                <button onClick={() => navigate('/logout')}>Logout</button>
               </div>
             )}
           </div>

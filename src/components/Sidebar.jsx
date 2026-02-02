@@ -23,11 +23,9 @@ function getColorLabel(hex) {
 }
 
 function getApiBaseUrl() {
-  let base = import.meta.env.VITE_API_URL || "";
-  base = base.replace(/\/+$/, ""); // remove trailing slashes
-  if (!/\/geo-?api$/i.test(base)) base += "/geo-api"; // ensure /geo-api suffix
-  return base;
+  return (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 }
+
 
 const LEGEND_TYPES = [
   { value: "kpi", label: "KPI Heatmap" },
@@ -270,7 +268,7 @@ const Sidebar = ({
     const formData = new FormData();
     formData.append("file", file);
 
-    const url = `${getApiBaseUrl()}/polygon/upload-zip`;
+    const url = `${getApiBaseUrl()}/geo-api/polygon/upload-zip`;
     console.log("⬆️ Uploading ZIP to:", url);
 
     const res = await fetch(url, {
@@ -297,7 +295,7 @@ const Sidebar = ({
       return;
     }
 
-    const url = `${getApiBaseUrl()}/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(
+    const url = `${getApiBaseUrl()}/geo-api/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(
       selectedPolygon
     )}`;
     console.log("📡 Fetching Polygon GeoJSON:", url);
@@ -1097,21 +1095,22 @@ const Sidebar = ({
         className="dropdown-wrapper"
         ref={(el) => (dropdownRefs.current[key] = el)}
       >
-        <input
-          className="input"
-          readOnly
-          value={
-            multiple
-              ? Array.isArray(value) && value.length
-                ? value.join(", ")
-                : ""
-              : value
-          }
-          placeholder={`Select ${key}`}
-          onClick={() =>
-            setShowDropdowns((prev) => ({ ...prev, [key]: !prev[key] }))
-          }
-        />
+      <input
+            className="input"
+            readOnly
+            value={
+              multiple
+                ? Array.isArray(value) && value.length
+                  ? value.join(", ")
+                  : ""
+                : value ?? ""
+            }
+            placeholder={`Select ${key}`}
+            onClick={() =>
+              setShowDropdowns((prev) => ({ ...prev, [key]: !prev[key] }))
+            }
+          />
+
 
         {showDropdowns[key] && (
           <div className="dropdown-list">

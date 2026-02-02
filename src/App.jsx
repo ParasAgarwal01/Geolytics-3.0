@@ -8,6 +8,7 @@ import "mapbox-gl/dist/mapbox-gl.css";
 import KPIGridUploader from "./components/KPIGridUploader";
 import * as turf from "@turf/turf";
 
+
 // === Generation Colors (for generation overview) ===
 const generationColors = {
   "2G": "#4CAF50",

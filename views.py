@@ -115,6 +115,7 @@ def load_all_db_engines():
     """
     global DB_ENGINES
     db_hosts = [
+        
         {
             "host": "10.133.132.90",
             "user": "postgres",
@@ -206,6 +207,7 @@ def refresh_db_engines():
 try:
     load_all_db_engines()
     refresh_db_engines()
+    TABLE_DB_CACHE.clear()
 except Exception:
     logger.exception(" Startup DB engine loading failed.")
 
@@ -341,7 +343,10 @@ def validate_date_column(engine, schema, table, date_col):
 
     return bool(exists)
 # === Simple in-memory cache ===
-AVAILABLE_DATES_CACHE: dict[tuple[str, str], list[str]] = {}
+# cache_key -> {"dates": [...], "ts": epoch_time}
+AVAILABLE_DATES_CACHE: dict[tuple[str, str], dict] = {}
+AVAILABLE_DATES_TTL = 60  # seconds (you can set 30 / 60 / 120)
+
 AVAILABLE_DATES_LOCK = Lock()
 
 
@@ -358,23 +363,42 @@ class AvailableDatesView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        cache_key = (project.lower(), table_type.lower())
+        cache_key = (
+            project.strip().lower(),
+            table_type.strip().lower(),
+            
+        )
+        
 
         # ---------- CACHE ----------
+        now = time.time()
+
         with AVAILABLE_DATES_LOCK:
-            if cache_key in AVAILABLE_DATES_CACHE:
-                return Response(
-                    {
-                        "project": project,
-                        "table_type": table_type,
-                        "available_dates": AVAILABLE_DATES_CACHE[cache_key],
-                        "cached": True,
-                    }
-                )
+            cached = AVAILABLE_DATES_CACHE.get(cache_key)
+            if cached:
+                age = now - cached["ts"]
+                if age < AVAILABLE_DATES_TTL:
+                    return Response(
+                        {
+                            "project": project,
+                            "table_type": table_type,
+                            "available_dates": cached["dates"],
+                            "cached": True,
+                            "cache_age_sec": int(age),
+                        }
+                    )
+                else:
+                    # cache expired
+                    AVAILABLE_DATES_CACHE.pop(cache_key, None)
+        
 
         try:
             # ---------- Read config ----------
             with config_engine.connect() as conn:
+                logger.error(
+                    f"[AvailableDates][DEBUG] DB="
+                    f"{conn.execute(text('SELECT inet_server_addr(), current_database()')).fetchone()}"
+                )
                 cfg = conn.execute(
                     text(
                         """
@@ -417,10 +441,10 @@ class AvailableDatesView(APIView):
             table = target_table or source_table
 
             if not target_db:
-                target_db = find_db_for_table_cached(table)
-
-            if not target_db:
-                raise Exception(f"Cannot resolve DB for table {table}")
+                raise Exception(
+                    f"[AvailableDates] target_db MUST be set in config for {project}/{table_type}"
+                )
+            
 
             engine = get_engine_for_db(target_db)
 
@@ -444,8 +468,10 @@ class AvailableDatesView(APIView):
                         "table_type": table_type,
                         "date_column": date_col,
                         "available_dates": [],
+                        "latest_date": None,
                     }
                 )
+                
 
             # ---------- Fetch distinct dates ----------
             with engine.connect() as conn:
@@ -482,7 +508,11 @@ class AvailableDatesView(APIView):
 
             # ---------- CACHE ----------
             with AVAILABLE_DATES_LOCK:
-                AVAILABLE_DATES_CACHE[cache_key] = dates
+                AVAILABLE_DATES_CACHE[cache_key] = {
+                    "dates": dates,
+                    "ts": time.time()
+                }
+                
 
             return Response(
                 {
@@ -490,8 +520,10 @@ class AvailableDatesView(APIView):
                     "table_type": table_type,
                     "date_column": date_col,
                     "available_dates": dates,
+                    "latest_date": dates[0] if dates else None,
                 }
             )
+            
 
         except Exception as e:
             logger.exception("/available-dates failed")
@@ -656,6 +688,8 @@ def apply_color_config(
                 if norm_band:
                     props["band"] = norm_band
                     all_bands.add(norm_band)
+                if norm_band and norm_band[0] not in ("N", "L", "U", "W", "G", "B"): 
+                    norm_band = None   
                 features.append(
                     {
                         "type": "Feature",
@@ -677,9 +711,9 @@ def apply_color_config(
 
     # Decide type
     numeric_series = pd.to_numeric(series, errors="coerce")
-    is_numeric = numeric_series.notna().sum() > 0 and not pd.api.types.is_string_dtype(
-        series
-    )
+    numeric_ratio = numeric_series.notna().sum() / max(len(series), 1)
+    is_numeric = numeric_ratio >= 0.8
+    
 
     palette = [
         "#e6194b",
@@ -713,6 +747,8 @@ def apply_color_config(
 
     if is_numeric:
         vals = numeric_series[mask & numeric_series.notna()]
+        if vals.empty:
+            vals = numeric_series[numeric_series.notna()]
         if vals.empty:
             # Nothing to color, fall back to grey
             value_to_color = {}
@@ -955,7 +991,7 @@ class ColumnsView(APIView):
         clean_name = re.sub(r"\s+$", "", name.strip().replace('"', ""))
         logger.info(f" Normalized: {clean_name}")
 
-        # Step 1: project_name → source_table (if config exists)
+        # Step 1: project_name ? source_table (if config exists)
         with config_engine.connect() as conn:
             cfg = conn.execute(
                 text(
@@ -972,7 +1008,7 @@ class ColumnsView(APIView):
         if cfg and cfg[0]:
             source_table = cfg[0]
             logger.info(
-                f" Mapped project '{clean_name}' → source_table='{source_table}'"
+                f" Mapped project '{clean_name}' ? source_table='{source_table}'"
             )
         else:
             source_table = clean_name
@@ -997,15 +1033,30 @@ class ColumnsView(APIView):
         )
 
         return Response(cols)
+def infer_series_type(values: list[str]):
+    """
+    Decide if column is numeric or categorical
+    based on numeric ratio.
+    """
+    if not values:
+        return "empty"
+
+    s = pd.Series(values).dropna().astype(str)
+
+    numeric = pd.to_numeric(s, errors="coerce")
+    ratio = numeric.notna().sum() / max(len(s), 1)
+
+    return "numeric" if ratio >= 0.8 else "categorical"
 
 
 class ColumnRangeView(APIView):
     permission_classes = [AllowAny]
+    
 
     def get(self, request):
         """
         /column-range endpoint - mirrors FastAPI logic:
-        - Auto-map project_name → target_table
+        - Auto-map project_name ? target_table
         - Auto-detect DB via find_db_for_table_cached
         - Fuzzy match column names
         - Safe numeric parsing
@@ -1021,7 +1072,7 @@ class ColumnRangeView(APIView):
 
         try:
             # --------------------------------------------------
-            # Step 0: project_name → target_table mapping
+            # Step 0: project_name ? target_table mapping
             # --------------------------------------------------
             with config_engine.connect() as conn:
                 mapping = conn.execute(
@@ -1039,7 +1090,7 @@ class ColumnRangeView(APIView):
             if mapping and mapping[0]:
                 mapped_table, mapped_db = mapping
                 logger.info(
-                    f"Auto-mapped project '{table}' → target_table '{mapped_table}' (DB={mapped_db})"
+                    f"Auto-mapped project '{table}' ? target_table '{mapped_table}' (DB={mapped_db})"
                 )
                 table = mapped_table
 
@@ -1130,7 +1181,7 @@ class ColumnRangeView(APIView):
                     status=404,
                 )
 
-            logger.info(f"Matched column → '{match_col}'")
+            logger.info(f"Matched column ? '{match_col}'")
 
             # --------------------------------------------------
             # Step 4: Compute min / max with optional date filter
@@ -1191,42 +1242,60 @@ class ColumnRangeView(APIView):
                     params["to_date"] = to_date
             
             sql = text(
-                f"""
-                SELECT MIN("{match_col}"), MAX("{match_col}")
+                f'''
+                SELECT "{match_col}"
                 FROM {qualified_table}
                 WHERE {' AND '.join(where_clauses)}
-                """
+                LIMIT 5000
+                '''
             )
-
+            
             with eng.connect() as conn:
-                result = conn.execute(sql, params).fetchone()
+                rows = conn.execute(sql, params).fetchall()
+            
+            values = [r[0] for r in rows if r[0] is not None]
+            
+            col_type = infer_series_type(values)
+            
+            if col_type == "numeric":
+                nums = pd.to_numeric(pd.Series(values), errors="coerce").dropna()
+                if nums.empty:
+                    return Response({"type": "numeric", "min": None, "max": None})
+            
+                return Response({
+                    "type": "numeric",
+                    "values": None,
+                    "min": float(nums.min()),
+                    "max": float(nums.max()),
+                })
+            
+            # categorical
+            uniques = sorted(set(map(str, values)))
+            return Response({
+                "type": "categorical",
+                "values": uniques[:50],
+                "count": len(uniques),
+                "min": None,
+                "max": None,
+            })
+            
 
-            # --------------------------------------------------
-            # Step 5: Response handling
-            # --------------------------------------------------
-            if result and result[0] is not None and result[1] is not None:
-                min_val = safe_float(result[0])
-                max_val = safe_float(result[1])
+            #     return Response(
+            #         {
+            #             "min": None,
+            #             "max": None,
+            #             "error": f"Column '{match_col}' contains non-numeric data",
+            #         },
+            #         status=400,
+            #     )
 
-                if min_val is not None and max_val is not None:
-                    return Response({"min": min_val, "max": max_val})
-
-                return Response(
-                    {
-                        "min": None,
-                        "max": None,
-                        "error": f"Column '{match_col}' contains non-numeric data",
-                    },
-                    status=400,
-                )
-
-            return Response(
-                {
-                    "min": None,
-                    "max": None,
-                    "error": f"No numeric data found in '{match_col}'",
-                }
-            )
+            # return Response(
+            #     {
+            #         "min": None,
+            #         "max": None,
+            #         "error": f"No numeric data found in '{match_col}'",
+            #     }
+            # )
 
         except Exception as e:
             logger.exception("/column-range failed")
@@ -1663,6 +1732,11 @@ class QueryDataView(APIView):
                 .replace("%27", "'")
                 .lower()
             )
+            # ====== GENERATION VIEW DETECTION (CRITICAL FIX) ======
+            is_generation_view = (
+                project.lower().endswith(("_2g", "_3g", "_4g", "_5g"))
+            )
+            
             candidates = [table_type_clean]
             if "kpi's" in table_type_clean:
                 candidates.append("kpis")
@@ -1726,17 +1800,60 @@ class QueryDataView(APIView):
                         break
 
             if not cfg:
-                logger.warning(f"No config found for {project}/{table_type}")
-                set_progress(100, "No data for this configuration")
-                reset_progress_later()
-                return Response(
-                    {
-                        "status": "missing_config",
-                        "message": f"No configuration found for {project} ({table_type})",
-                        "features": [],
-                        "bands": [],
+                if is_generation_view:
+                    logger.info(
+                        f"GENERATION VIEW WITHOUT CONFIG | project={project} | forcing source-only"
+                    )
+            
+                    # Step 1: Try to resolve source_table from ANY config row of this project
+                    with config_engine.connect() as conn:
+                        row = conn.execute(
+                            text("""
+                                SELECT source_table
+                                FROM geolytics_projectconfiguration
+                                WHERE lower(trim(project_name)) = lower(:p)
+                                  AND source_table IS NOT NULL
+                                LIMIT 1
+                            """),
+                            {"p": project.strip()}
+                        ).fetchone()
+            
+                    if not row or not row[0]:
+                        raise Exception(
+                            f"No source_table mapping found for generation project {project}"
+                        )
+            
+                    source_table = row[0].strip()
+                    inferred_db = infer_db_from_project(project)
+            
+                    if not inferred_db:
+                        raise Exception("Could not infer DB for generation view")
+            
+                    # Minimal fake cfg (but with REAL source_table)
+                    cfg = {
+                        "source_table": source_table,
+                        "source_column": None,
+                        "target_table": None,
+                        "target_column": None,
+                        "target_db": None,
+                        "date column": None,
+                        "band": None,
                     }
-                )
+            
+                else:
+                    # ===== NON-GENERATION: STRICT CONFIG REQUIRED =====
+                    logger.warning(f"No config found for {project}/{table_type}")
+                    set_progress(100, "No data for this configuration")
+                    reset_progress_later()
+                    return Response(
+                        {
+                            "status": "missing_config",
+                            "message": f"No configuration found for {project} ({table_type})",
+                            "features": [],
+                            "bands": [],
+                        }
+                    )
+            
 
             # ====== Read core config ======
             source_table = (cfg.get("source_table") or "").strip()
@@ -1903,7 +2020,7 @@ class QueryDataView(APIView):
                     f'"{lon_col}" IS NOT NULL'
                 ]
             
-                # 🔥 APPLY DATE FILTER TO SOURCE TABLE
+                # ?? APPLY DATE FILTER TO SOURCE TABLE
                 if date_col and validate_date_column(source_engine, s_schema, s_table, date_col):
                     if selected_dates:
                         where_clauses.append(f'"{date_col}"::date IN :dates')
@@ -2658,8 +2775,18 @@ class DistinctValuesView(APIView):
                     {"p": table},
                 )
                 row = result.fetchone()
-                if row:
-                    resolved_table = row[1] or row[0]
+                source_table, target_table = row if row else (None, None)
+                
+                # decide table based on column ownership
+                resolved_table = source_table or target_table
+                db_for_source = find_db_for_table_cached(source_table)
+                db_for_target = find_db_for_table_cached(target_table) if target_table else None
+                
+                if db_for_target:
+                    tgt_cols = get_columns_for_table_cached(db_for_target, target_table)
+                    if col in tgt_cols:
+                        resolved_table = target_table
+                
 
 
             db_for_table = find_db_for_table_cached(resolved_table)

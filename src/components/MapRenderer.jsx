@@ -1,10 +1,21 @@
 // MapRenderer.jsx — merged: new legend + old UI (search, toolbar, ruler, info panel)
 
 import React, { useEffect, useRef, useState } from "react";
+import toast from 'react-hot-toast';
 import mapboxgl from "mapbox-gl";
 import * as turf from "@turf/turf";
 import "mapbox-gl/dist/mapbox-gl.css";
 import "../Styles.css";
+import MapboxDraw from "@mapbox/mapbox-gl-draw";
+import CircleMode from "mapbox-gl-draw-circle-mode";
+import FreehandMode from "mapbox-gl-draw-freehand-mode";
+import Papa from "papaparse";
+import { Pentagon, Pencil, Trash2, Save } from "lucide-react";
+import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
+// import { getEnabledFeatures } from "../Utils/cookieUtils";
+import {getToken, checkCookieExpiration,isUserLoggedIn } from "./CookiesUtils";
+import { redirectToLogin } from "./Logout";
+
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
@@ -216,6 +227,50 @@ const createSectorPolygonFeature = (
   return turf.feature(turf.polygon([[...outer, ...inner, outer[0]]]).geometry);
 };
 
+
+  const generateColors = (values) => {
+    const colors = {};
+    const step = 360 / values.length;
+    values.forEach((val, i) => {
+      colors[val] = `hsl(${Math.round(i * step)},70%,50%)`;
+    });
+    return colors;
+  };
+  
+  // const buildMatchExpression = (geojson) => {
+  //   const zones = [...new Set(geojson.features.map(f => f.properties.B4_Polygon))];
+  //   const colors = generateColors(zones);
+  //   const expression = ['match', ['get', 'B4_Polygon']];
+  //   zones.forEach(zone => {
+  //     expression.push(zone, colors[zone]);
+  //   });
+  //   expression.push('#cccccc');
+  //   return expression;
+  // };
+
+
+  const buildMatchExpression = (geojson) => {
+  const expression = ['match', ['get', 'zone_id']];
+
+  geojson.features.forEach((feature) => {
+    const zoneId = String(feature.properties.zone_id);
+
+    expression.push(zoneId, '#00ff99'); // hardcoded color for now
+  });
+
+  expression.push('#cccccc'); // fallback color
+  console.log('🎨 fill-color expression:', expression);
+
+  return expression;
+};
+
+
+
+
+
+
+
+
 /* ---------------- Component ---------------- */
 
 const MapRenderer = ({
@@ -269,12 +324,18 @@ const MapRenderer = ({
   const [datePanelCollapsed, setDatePanelCollapsed] = useState(false);
   const lastClickedOriginalFeatureRef = useRef(null);
 
+const [showPolygonList, setShowPolygonList] = useState(false);  // upload expansion
+
+// 🎨 Polygon UI toggle
+const [showPolygonPanel, setShowPolygonPanel] = useState(false);
 
 
   const [showLegend, setShowLegend] = useState(true);
   const [legendMode, setLegendMode] = useState("sector"); // sector | driveTest | grid | generation | rca | cmchange | band
   // ⭐ Detect ALARM / TRAFFIC and switch legend mode
   // ⭐ Alarm / Traffic label remapping (display only)
+
+  
   const remapAlarmValue = (val) => {
     if (!val) return val;
     const s = String(val).trim();
@@ -302,6 +363,24 @@ const MapRenderer = ({
     return s;
   };
 
+
+  
+  const applyFillColors = () => {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      const fillLayer = map.getStyle().layers.find(l => l.id.includes('fill'));
+      if (!fillLayer) return;
+
+      map.setPaintProperty(fillLayer.id, 'fill-color', ['get', 'fillColor']);
+      map.setPaintProperty(fillLayer.id, 'fill-opacity', 0.4); 
+    };
+
+
+  useEffect(() => {
+    checkCookieExpiration();
+  }, []);
+
   // ⭐ Force legend dropdown to switch when table changes
   useEffect(() => {
     const type = (tableType || "").toLowerCase();
@@ -318,6 +397,11 @@ const MapRenderer = ({
       setLegendMode("sector"); // default for KPI / others
     }
   }, [tableType]);
+useEffect(() => {
+  if (!showPolygonPanel) {
+    setShowPolygonList(false);
+  }
+}, [showPolygonPanel]);
 
   useEffect(() => {
     const typeLower = (tableType || "").toLowerCase();
@@ -377,8 +461,7 @@ const MapRenderer = ({
   const [cmLegend, setCmLegend] = useState([]); // [{from,to,color}]
   const [uniqueBands, setUniqueBands] = useState([]);
   const [bandColorMap, setBandColorMap] = useState({});
-  const [generationColorMap, setGenerationColorMap] =
-    useState(GENERATION_COLORS);
+  const [generationColorMap, setGenerationColorMap] = useState(GENERATION_COLORS);
 
   // KPI color overrides
   const [sectorKpiColors, setSectorKpiColors] = useState({}); // key: `${kpi}__${baseColor}`
@@ -413,6 +496,1217 @@ const MapRenderer = ({
   const [selectedSiteIdState, setSelectedSiteIdState] = useState("");
   const [infoSource, setInfoSource] = useState({});
   const [infoTarget, setInfoTarget] = useState({});
+
+  //  POLYGON DRAWING & SITE DETECTION SECTION
+
+  const drawRef = useRef(null);                           // MapboxDraw instance
+  const popupRef = useRef(null);                          // Mapbox Popup instance
+  const currentMatchedSitesRef = useRef([]);              // Sites matched in polygon
+  const currentActiveZoneIdRef = useRef(null);            // Current zone ID
+  const isDrawingRef = useRef(false);                     // Is user currently drawing
+  
+  const [isDrawing, setIsDrawing] = useState(false);      // Drawing mode state
+  const [showCountryPopup, setShowCountryPopup] = useState(false);  // Show country selection popup
+  const [pendingMode, setPendingMode] = useState(null);   // Pending draw mode
+  const [polygonCount, setPolygonCount] = useState(0);    // Counter for zone IDs
+  const [selectedCountry, setSelectedCountry] = useState(null);  // Selected country
+  const [listpolygon,setListpolygon] = useState([])
+  const [userselectedPolygon, setUserSelectedPolygon] = useState(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  const [uploadedZipId, setUploadedZipId] = useState(null);
+  const [polygonFiles, setPolygonFiles] = useState([]);
+  const [showShpPopup, setShowShpPopup] = useState(false);
+  const [selectedShpFile, setSelectedShpFile] = useState(null);
+  const [projectZones, setProjectZones] = useState([]);
+   const [selectedPolygon, setSelectedPolygon] = useState(null);
+
+
+
+  const fileInputRef = useRef(null);
+
+  
+
+  const username = checkCookieExpiration().userData?.first_name || "User";
+  // console.log(checkCookieExpiration(),'cookies')
+  const userRole = checkCookieExpiration().userData?.role || 'User';
+
+  // --- COUNTRY COORDINATES FOR MAP FLYTO ---
+  const countryCoordinates = {
+    UK: { coords: [-0.1276, 51.5074], prefix: "UK" },
+    USA: { coords: [-95.7129, 37.0902], prefix: "USA" },
+    India: { coords: [78.9629, 20.5937], prefix: "IND" },
+  };
+
+  // Initialize drawing tools effect
+  useEffect(() => {
+    if (!mapInstance.current) {
+      console.log("⏳ Waiting for mapInstance...");
+      return;
+    }
+
+    const map = mapInstance.current;
+    console.log("🗺️ Map instance available, checking if Draw is needed...");
+
+    // Check if Draw is already initialized
+    if (drawRef.current) {
+      console.log("✅ Draw already initialized");
+      return;
+    }
+
+    // Wait for map to be fully loaded
+    const initDraw = () => {
+      if (drawRef.current) {
+        console.log("✅ Draw already exists, skipping init");
+        return;
+      }
+      initializeDrawingTools(map);
+    };
+
+    if (map.isStyleLoaded()) {
+      console.log("🎯 Map style already loaded, initializing Draw...");
+      initDraw();
+    } else {
+      console.log("⏳ Waiting for map style to load...");
+      map.once("load", initDraw);
+      map.once("style.load", initDraw);
+    }
+
+    return () => {
+      // Cleanup on unmount
+      if (drawRef.current && map.getSource("draw-source")) {
+        // Draw instance already handles its cleanup
+      }
+    };
+  }, [mapInstance]);
+
+
+useEffect(() => {
+  console.log("Auth check useEffect running");
+  const value = isUserLoggedIn();
+  console.log("isUserLoggedIn:", value);
+  setIsLoggedIn(value);
+}, []);
+
+
+  const token = checkCookieExpiration().userData.token
+    if (!token) {
+      alert("Session expired. Please login again.");
+      return;
+    }
+
+
+const getRandomColor = () => {
+  const letters = "0123456789ABCDEF";
+  let color = "#";
+  for (let i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
+};
+
+
+  function getApiBaseUrl() {
+  return (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+}
+
+
+  const handlePolygonZipUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${getApiBaseUrl()}/geo-api/polygon/upload-zip`, {
+      method: "POST",
+      body: formData,
+    });
+    
+    const data = await res.json();
+    console.log(data,'data')
+    setUploadedZipId(data.zip_id);
+    setPolygonFiles(data.files);
+
+    setSelectedShpFile(null);
+    setShowShpPopup(true);
+
+    e.target.value = ""
+
+  };
+
+
+  const onChooseClick = () => {
+  if (!uploadedZipId) {
+    alert("Please upload zip first");
+    return;
+  }
+  setShowShpPopup(true);
+};
+
+
+  const fetchProjectZones = async (fileName) => {
+  setSelectedShpFile(fileName);
+
+  const res = await fetch(
+    `${getApiBaseUrl()}/geo-api/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(
+      fileName
+    )}`
+  );
+
+  const data = await res.json();
+  console.log(data,'df')
+
+    const zones = data.features.map((f) => ({
+      id: f.properties.id,           // Use properties.id as unique id
+      zone_id: f.properties.id,      // Or use f.id if you want
+      zone_name: f.properties.B4_Polygon,
+      geometry: f.geometry
+    }));
+
+    setProjectZones(zones);
+    setShowShpPopup(false);
+    setShowPolygonList(true);
+
+ 
+  setShowShpPopup(false);
+};
+
+
+  const onButtonClick = () => {
+    fileInputRef.current.click();
+  };
+
+
+
+
+
+useEffect(() => {
+  async function initPolygonCounter() {
+    const res = await fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/user_polygon_list`,
+
+      {
+        headers: {
+          Authorization: `Token ${token}`,
+        },
+      }
+    );
+
+    if (!res.ok) {
+      console.error("Failed to fetch polygons");
+      return;
+    }
+
+  const data = await res.json();   
+    setListpolygon(data.results)
+    const polygons = data.results || [];
+
+   
+
+    let maxIndex = -1;
+
+    polygons.forEach((p) => {
+      const parts = p.zone_id.split("_");
+      const num = parseInt(parts[1], 10);
+      if (!isNaN(num) && num > maxIndex) {
+        maxIndex = num;
+      }
+    });
+
+    setPolygonCount(maxIndex + 1);
+  }
+
+  if (isLoggedIn) {
+    initPolygonCounter();
+  }
+}, [isLoggedIn, token]);
+
+
+
+  // *** FUNCTION 1: INITIALIZE DRAWING TOOLS ***
+//   const initializeDrawingTools = (map) => {
+//     if (drawRef.current) {
+//       console.log(" Draw already initialized, skipping");
+//       return;
+//     }
+
+//     console.log(" Starting Draw initialization...");
+
+//     try {
+//       const draw = new MapboxDraw({
+//         displayControlsDefault: false,
+//         controls: {
+//           polygon: false,
+//           trash: false,
+//         },
+//         modes: {
+//           ...MapboxDraw.modes,
+//           draw_circle: CircleMode,
+//           draw_freehand: FreehandMode,
+//         },
+//       });
+
+//        map.on("load", () => {
+//     if (!map.getSource("mapbox-gl-draw-cold")) return;
+
+//     if (!map.getLayer("custom-draw-fill")) {
+//       map.addLayer({
+//         id: "custom-draw-fill",
+//         type: "fill",
+//         source: "mapbox-gl-draw-cold",
+//         filter: ["==", ["geometry-type"], "Polygon"],
+//         paint: {
+//           "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+//           "fill-opacity": 0.4,
+//         },
+//       });
+//     }
+//   });
+
+
+      
+//       map.addControl(draw);
+//       console.log("✅ Draw control added to map");
+
+//       if (!map.getLayer("draw-fill-inactive")) {
+//   map.addLayer({
+//     id: "draw-fill-inactive",
+//     type: "fill",
+//     source: "mapbox-gl-draw-cold",
+//     filter: ["==", ["get", "$type"], "Polygon"],
+//     paint: {
+//       "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+//       "fill-opacity": 0.4
+//     }
+//   });
+// }
+
+// if (!map.getLayer("draw-fill-active")) {
+//   map.addLayer({
+//     id: "draw-fill-active",
+//     type: "fill",
+//     source: "mapbox-gl-draw-hot",
+//     filter: ["==", ["get", "$type"], "Polygon"],
+//     paint: {
+//       "fill-color": ["coalesce", ["get", "fillColor"], "#2563eb"],
+//       "fill-opacity": 0.6
+//     }
+//   });
+// }
+
+
+//       drawRef.current = draw;
+
+//       console.log(" drawRef.current is now set");
+
+//       // Setup event listeners
+//       setupDrawingListeners(map, draw);
+//       console.log(" Event listeners attached");
+
+//       // Load existing polygons
+//       loadExistingPolygons();
+//       console.log(" Attempted to load existing polygons");
+//     } catch (error) {
+//       console.error(" Error initializing Draw:", error);
+//       drawRef.current = null;
+//     }
+//   };
+
+
+
+const initializeDrawingTools = (map) => {
+  if (drawRef.current) {
+    console.log("Draw already initialized, skipping");
+    return;
+  }
+
+  console.log("Starting Draw initialization...");
+
+  try {
+    // Initialize Mapbox Draw with custom styles
+    const draw = new MapboxDraw({
+      displayControlsDefault: false,
+      controls: {
+        polygon: false,
+        trash: false,
+      },
+      modes: {
+        ...MapboxDraw.modes,
+        draw_circle: CircleMode,
+        draw_freehand: FreehandMode,
+      },
+      styles: [
+        // Inactive polygon fill
+        {
+          id: "gl-draw-polygon-fill-inactive",
+          type: "fill",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+            "fill-opacity": 0.4,
+          },
+        },
+        // Active polygon fill
+        {
+          id: "gl-draw-polygon-fill-active",
+          type: "fill",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "fill-color": ["coalesce", ["get", "fillColor"], "#2563eb"],
+            "fill-opacity": 0.6,
+          },
+        },
+        // Polygon outline
+        {
+          id: "gl-draw-polygon-stroke",
+          type: "line",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "line-color": "#000000",
+            "line-width": 2,
+          },
+        },
+        // Draw-time vertices halo
+        {
+          id: "gl-draw-polygon-and-line-vertex-halo-active",
+          type: "circle",
+          filter: ["all", ["==", "$type", "Point"], ["!=", "meta", "midpoint"]],
+          paint: {
+            "circle-radius": 6,
+            "circle-color": ["coalesce", ["get", "fillColor"], "#3b92f6"],
+            "circle-opacity": 0.8,
+          },
+        },
+        // Draw-time vertices actual points
+        {
+          id: "gl-draw-polygon-and-line-vertex-active",
+          type: "circle",
+          filter: ["all", ["==", "$type", "Point"], ["!=", "meta", "midpoint"]],
+          paint: {
+            "circle-radius": 4,
+            "circle-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+            "circle-opacity": 1,
+          },
+        },
+      ],
+    });
+
+    // Add Draw to the map
+    map.addControl(draw);
+    drawRef.current = draw;
+    console.log(" Draw control added and drawRef set");
+
+    // Event listener: polygon creation
+    map.on("draw.create", (e) => {
+      const feature = e.features[0];
+      if (!feature) return;
+
+      // Assign random fill color
+      const color = getRandomColor();
+      draw.setFeatureProperty(feature.id, "fillColor", color);
+
+      // Assign zone ID
+      setPolygonCount((prev) => {
+        const zoneId = `west_${prev}_${username}`;
+        draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+        currentActiveZoneIdRef.current = zoneId;
+        return prev + 1;
+      });
+    });
+
+ 
+    setupDrawingListeners(map, draw);
+
+    // Load existing polygons with unique colors
+    loadExistingPolygons();
+
+    console.log("✅ Draw initialization complete");
+
+  } catch (error) {
+    console.error("Error initializing Draw:", error);
+    drawRef.current = null;
+  }
+};
+
+
+
+  
+
+
+ 
+
+  const setupDrawingListeners = (map, draw) => {
+    console.log("🎯 Setting up drawing listeners...");
+
+    // Mode change listener
+map.on("draw.modechange", (e) => {
+  const mode = draw.getMode();
+  isDrawingRef.current = mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"));
+
+  const canvas = map.getCanvas();
+  if (isDrawingRef.current && canvas) {
+    canvas.style.cursor = "crosshair";
+  } else if (canvas) {
+    canvas.style.cursor = "default";
+  }
+});
+
+
+
+
+
+    
+
+
+
+    // Draw create listener - set zone ID on new polygon
+      // map.on("draw.create", (e) => {
+      //   const feature = e.features?.[0];
+      //   if (!feature) return;
+
+      //   const color = getRandomColor();
+      //   draw.setFeatureProperty(feature.id, "fillColor", color);
+
+      //   setPolygonCount((prev) => {
+      //     const zoneId = `west_${prev}_${username}`;
+      //     draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+      //     currentActiveZoneIdRef.current = zoneId;
+      //     return prev + 1;
+      //   });
+      // });
+
+
+
+map.on("draw.create", (e) => {
+  const feature = e.features[0];
+  if (!feature) return;
+
+  const color = getRandomColor();
+  draw.setFeatureProperty(feature.id, "fillColor", color);
+
+ 
+  setPolygonCount((prev) => {
+    const zoneId = `west_${prev}_${username}`;
+    draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+    currentActiveZoneIdRef.current = zoneId;
+    return prev + 1;
+  });
+
+  
+});
+
+
+
+      
+
+
+  map.on("load", () => {
+  // inactive polygons
+  map.addLayer({
+    id: "draw-fill-inactive",
+    type: "fill",
+    source: "mapbox-gl-draw-cold",
+    filter: ["==", ["get", "$type"], "Polygon"],
+    paint: {
+      "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+      "fill-opacity": 0.4
+    }
+  });
+
+  // active polygon
+  map.addLayer({
+    id: "draw-fill-active",
+    type: "fill",
+    source: "mapbox-gl-draw-hot",
+    filter: ["==", ["get", "$type"], "Polygon"],
+    paint: {
+      "fill-color": ["coalesce", ["get", "fillColor"], "#2563eb"],
+      "fill-opacity": 0.6
+    }
+  });
+});
+
+
+
+      
+
+
+
+    map.on("draw.update", handleDrawingComplete);
+
+    // Global click handler for CSV and Submit buttons
+    const handleGlobalClick = (e) => {
+      if (e.target.id === "export-csv-btn") {
+        handleExportCSV();
+      }
+      if (e.target.id === "submit-db-btn") {
+        handleSubmitToBackend();
+      }
+    };
+
+    // Map click listener for site detection and polygon clicks
+    map.on("click", handleMapClick);
+
+    // Setup cursor handling for polygon hover
+    setupCursorHandling(map, draw);
+
+    // Right-click or Escape to finish drawing
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && isDrawingRef.current) {
+        console.log("✋ Escape pressed, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    // Right-click context menu - finish drawing
+    const handleContextMenu = (e) => {
+      if (isDrawingRef.current) {
+        e.preventDefault();
+        console.log("✋ Right-click, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    document.addEventListener("click", handleGlobalClick);
+    document.addEventListener("keydown", handleKeyDown);
+    map.getCanvas().addEventListener("contextmenu", handleContextMenu);
+
+    // Cleanup function
+    return () => {
+      document.removeEventListener("click", handleGlobalClick);
+      document.removeEventListener("keydown", handleKeyDown);
+      map.getCanvas().removeEventListener("contextmenu", handleContextMenu);
+    };
+  };
+
+
+
+  const activateTool = (mode) => {
+    
+    
+
+    if (!drawRef.current) {
+      setTimeout(() => {
+        if (drawRef.current) {
+    
+          activateTool(mode);
+        } else {
+          if (mapInstance.current) {
+            console.log("🔧 Force initializing Draw...");
+            initializeDrawingTools(mapInstance.current);
+            setTimeout(() => {
+              activateTool(mode);
+            }, 300);
+          }
+        }
+      }, 500);
+      return;
+    }
+
+    try {
+      drawRef.current.changeMode(mode);
+      
+      // Set cursor immediately and after mode change settles
+      const setCursor = () => {
+        if (mapInstance.current) {
+          const canvas = mapInstance.current.getCanvas();
+          if (canvas) {
+            canvas.style.cursor = "crosshair";
+  
+          }
+        }
+      };
+      
+      setCursor();
+      
+      setTimeout(() => {
+        setCursor();
+      }, 100);
+    } catch (error) {
+      console.error(" Error activating tool:", error);
+    }
+  };
+
+  const handleDrawingComplete = () => {
+    console.log("✏️ Drawing completed");
+    if (!drawRef.current) return;
+
+    const data = drawRef.current.getAll();
+    if (data.features.length === 0) return;
+
+    const lastFeature = data.features[data.features.length - 1];
+    console.log("📦 Last drawn feature:", lastFeature);
+
+    // Detect clicked sites within polygon
+    detectClickedSites(lastFeature);
+  };
+
+  // *** FUNCTION 7: DETECT CLICKED SITES ***
+  const detectClickedSites = (polygon) => {
+    // Get site data from geojsonData
+    const sites = geojsonData?.features || [];
+    
+    if (!sites || sites.length === 0) {
+      console.warn("⚠️ No site data available");
+      currentMatchedSitesRef.current = [];
+      showZonePopup(polygon, []);
+      return;
+    }
+
+    const matchedSites = [];
+    sites.forEach((feature) => {
+      try {
+        if (feature && feature.geometry) {
+          let coordinates = null;
+          
+          // Handle Point geometry
+          if (feature.geometry.type === "Point" && feature.geometry.coordinates) {
+            coordinates = feature.geometry.coordinates;
+          }
+          // Handle properties with Lat/Long
+          else if (feature.properties) {
+            const lat = feature.properties.Lat || feature.properties.LATITUDE || feature.properties.latitude;
+            const lon = feature.properties.Long || feature.properties.LONGITUDE || feature.properties.longitude;
+            if (lat != null && lon != null) {
+              coordinates = [lon, lat];
+            }
+          }
+
+          if (coordinates) {
+            const point = turf.point(coordinates);
+            if (turf.booleanPointInPolygon(point, polygon)) {
+              matchedSites.push(feature);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error checking point in polygon:", err);
+      }
+    });
+
+    currentMatchedSitesRef.current = matchedSites;
+    console.log(`🎯 Found ${matchedSites.length} sites in polygon`);
+
+    // Show popup with zone info
+    showZonePopup(polygon, matchedSites);
+  };
+
+  // *** FUNCTION 8: SHOW ZONE POPUP ***
+  const showZonePopup = (polygon, sites) => {
+    const draw = drawRef.current;
+    if (!draw) return;
+
+    // Find or create zone ID
+    let zoneId = currentActiveZoneIdRef.current;
+    if (!zoneId) {
+      const countryPrefix = "UK"; // Default country
+      zoneId = `${countryPrefix}_${polygonCount}_${username}`;
+      currentActiveZoneIdRef.current = zoneId;
+    }
+
+    // Build site list HTML - handle various property names
+    const siteList =
+      sites.length === 0
+        ? "<i style=\"color: #999;\">No sites found</i>"
+        : sites
+            .slice(0, 15)
+            .map((s) => {
+              const props = s.properties || {};
+              const siteName = props.SITENAME || props.sitename || props["SITE NAME"] || props.site_name || props["SITE ID"] || props.site_id || "Unknown Site";
+              return `<div style="padding: 4px 6px; border-bottom: 1px solid #eee; font-size: 11px;">
+                  ${siteName}
+                </div>`;
+            })
+            .join("");
+
+    // Create popup content
+    const popupContent = document.createElement("div");
+    popupContent.innerHTML = `
+      <div style="padding: 12px; font-size: 12px; color: #333; min-width: 240px; max-width: 280px;">
+        <div style="margin-bottom: 8px;">
+          <strong style="font-size: 13px;">Zone ID:</strong><br/>
+          <span style="font-size: 11px; color: #666;">${zoneId}</span>
+        </div>
+        
+        <div style="margin-bottom: 8px; display: flex; gap: 6px;">
+          <button id="export-csv-btn" style="flex: 1; padding: 6px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            📊 Export CSV
+          </button>
+          <button id="submit-db-btn" style="flex: 1; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            💾 Save DB
+          </button>
+        </div>
+
+        <div style="margin-bottom: 6px;">
+          <strong>Total Sites:</strong> <span style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-weight: 600;">${sites.length}</span>
+        </div>
+
+        <div style="margin-bottom: 6px; background: #f9f9f9; border-radius: 4px; max-height: 140px; overflow-y: auto; border: 1px solid #e0e0e0;">
+          ${siteList}
+        </div>
+
+        <div style="font-size: 10px; color: #999; text-align: center; padding-top: 6px; border-top: 1px solid #e0e0e0;">
+          Right-click to close polygon
+        </div>
+      </div>
+    `;
+
+    // Remove old popup
+    if (popupRef.current) {
+      popupRef.current.remove();
+    }
+
+    // Create new popup at polygon center
+    const center = turf.centroid(polygon);
+    popupRef.current = new mapboxgl.Popup({ closeOnClick: true })
+      .setLngLat(center.geometry.coordinates)
+      .setDOMContent(popupContent)
+      .addTo(mapInstance.current);
+
+    // Attach event listeners to buttons
+    setTimeout(() => {
+      const csvBtn = document.getElementById("export-csv-btn");
+      const submitBtn = document.getElementById("submit-db-btn");
+
+      if (csvBtn) {
+        csvBtn.addEventListener("click", handleExportCSV);
+      }
+
+      if (submitBtn) {
+        submitBtn.addEventListener("click", handleSubmitToBackend);
+      }
+    }, 0);
+  };
+
+
+const handleMapClick = (e) => {
+  const map = mapInstance.current;
+  const draw = drawRef.current;
+  if (!map || !draw) return;
+
+
+  if (isDrawingRef.current) return;
+
+  const ids = draw.getFeatureIdsAt(e.point);
+  if (ids && ids.length > 0) {
+    const feature = draw.get(ids[0]);
+    if (feature?.geometry?.type === "Polygon") {
+      map.getCanvas().style.cursor = "pointer";
+      detectClickedSites(feature);
+      return;
+    }
+  }
+
+
+  const features = map.queryRenderedFeatures(e.point, {
+    layers: ["user-polygons-fill", "selected-polygon-fill"],
+  });
+
+  if (!features.length) {
+    map.getCanvas().style.cursor = "default";
+    if (popupRef.current) popupRef.current.remove();
+    return;
+  }
+
+  const polygon = features[0];
+  map.getCanvas().style.cursor = "pointer";
+
+  detectClickedSites({
+    type: "Feature",
+    geometry: polygon.geometry,
+    properties: polygon.properties || {},
+  });
+};
+
+
+
+
+  // *** FUNCTION 6: SETUP CURSOR HANDLING ***
+  const setupCursorHandling = (map, draw) => {
+    map.on("mousemove", (e) => {
+      const ids = draw.getFeatureIdsAt(e.point);
+      if (ids && ids.length > 0) {
+        // Hovering over polygon
+        map.getCanvas().style.cursor = "pointer";
+      } else if (!isDrawingRef.current) {
+        // Not hovering over polygon and not drawing
+        map.getCanvas().style.cursor = "default";
+      }
+    });
+  };
+
+  // *** FUNCTION 9: HANDLE EXPORT CSV ***
+  
+  const handleExportCSV = () => {
+    if (currentMatchedSitesRef.current.length === 0) {
+      alert("No sites to export");
+      return;
+    }
+
+    try {
+      const csv = Papa.unparse(
+        currentMatchedSitesRef.current.map((s) => s.properties)
+      );
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([csv]));
+      link.download = `${currentActiveZoneIdRef.current}.csv`;
+      link.click();
+      console.log("✅ CSV exported");
+    } catch (error) {
+      console.error("Error exporting CSV:", error);
+      alert("Error exporting CSV");
+    }
+  };
+
+  // *** FUNCTION 10: HANDLE SUBMIT TO BACKEND ***
+ 
+  const handleSubmitToBackend = async () => {
+    const token = checkCookieExpiration().userData.token
+    if (!token) {
+      toast.error("Session expired. Please login again.");
+      redirectToLogin();
+      return;
+    }
+
+    const draw = drawRef.current;
+    if (!draw) {
+      toast.error("Drawing tools not ready");
+      return;
+    }
+
+    const zoneId = currentActiveZoneIdRef.current;
+    const sites = currentMatchedSitesRef.current;
+
+    console.log(zoneId,'z')
+
+    if (!zoneId) {
+      toast.error("No zone ID set");
+    }
+
+    const allFeatures = draw.getAll().features;
+    const currentPolygon = allFeatures.find((f) => f.properties?.zone_id === zoneId);
+    console.log(currentPolygon,'hj')
+
+    if (!currentPolygon) {
+      toast.error("Could not find the polygon geometry to save.");
+      return;
+    }
+
+    const payload = {
+      zoneId,
+      country: "UK",
+      site_data: {
+        feature: currentPolygon,
+        matched_sites: sites.map((s) => s.properties),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log(payload, "payload");
+
+
+  const savePromise = fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/save_polygon`,
+
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Token ${token}`,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    toast.promise(savePromise, {
+      loading: 'Saving polygon...',
+      success: (res) => {
+        if (!res.ok) throw new Error('Server error');
+        return 'Polygon saved successfully! ✅';
+      },
+      error: (err) => `Error: ${err.message || 'Network error'} ❌`,
+    });
+};
+
+
+const zoomToPolygon = (polygon) => {
+  const draw = drawRef.current;
+  if (!draw) return;
+
+  const feature = draw.get(polygon.id);
+  if (!feature?.geometry) return;
+
+  const geometry = feature.geometry;
+
+  const coordinates =
+    geometry.type === "MultiPolygon"
+      ? geometry.coordinates.flat(2)
+      : geometry.coordinates[0];
+
+  const bounds = coordinates.reduce(
+    (b, coord) => b.extend(coord),
+    new mapboxgl.LngLatBounds(coordinates[0], coordinates[0])
+  );
+
+  // ✅ USE THE REAL MAP INSTANCE
+  const map = mapInstance.current;
+  if (!map) {
+    console.warn("⚠️ Map instance not ready");
+    return;
+  }
+
+  map.fitBounds(bounds, {
+    padding: 60,
+    duration: 1000,
+  });
+};
+
+
+const drawAndZoomSelectedPolygon = (polygon) => {
+  const map = mapInstance.current;
+  if (!map) return;
+
+  let feature = null;
+
+  // Case 1: Saved GeoJSON
+  if (polygon.site_data?.feature) {
+    feature = {
+      ...polygon.site_data.feature,
+      id: polygon.id,
+      properties: {
+        ...polygon.site_data.feature.properties,
+        zone_id: polygon.zone_id,
+        country: polygon.country,
+      },
+    };
+  }
+  // Case 2: Coordinate array
+  else if (Array.isArray(polygon.site_data)) {
+    const points = polygon.site_data.map((p) => [
+      p.LONGITUDE,
+      p.LATITUDE,
+    ]);
+
+    if (
+      points[0][0] !== points[points.length - 1][0] ||
+      points[0][1] !== points[points.length - 1][1]
+    ) {
+      points.push(points[0]);
+    }
+
+    feature = turf.polygon([points], {
+      zone_id: polygon.zone_id,
+      id: polygon.id,
+    });
+    feature.id = polygon.id;
+  }
+
+  if (!feature) return;
+
+  // 🔴 Remove old
+  if (map.getLayer("selected-polygon-fill")) {
+    map.removeLayer("selected-polygon-fill");
+    map.removeLayer("selected-polygon-outline");
+    map.removeSource("selected-polygon");
+  }
+
+  // 🟢 Add source
+  map.addSource("selected-polygon", {
+    type: "geojson",
+    data: feature,
+  });
+
+  map.addLayer({
+    id: "selected-polygon-fill",
+    type: "fill",
+    source: "selected-polygon",
+    paint: {
+      "fill-color": "#22c55e",
+      "fill-opacity": 0.5,
+    },
+  });
+
+  map.addLayer({
+    id: "selected-polygon-outline",
+    type: "line",
+    source: "selected-polygon",
+    paint: {
+      "line-color": "#72a316",
+      "line-width": 2,
+    },
+  });
+
+  // 🟢 Zoom
+  const coords =
+    feature.geometry.type === "MultiPolygon"
+      ? feature.geometry.coordinates.flat(2)
+      : feature.geometry.coordinates[0];
+
+  const bounds = coords.reduce(
+    (b, c) => b.extend(c),
+    new mapboxgl.LngLatBounds(coords[0], coords[0])
+  );
+
+  map.fitBounds(bounds, {
+    padding: 60,
+    duration: 1000,
+  });
+
+  // ✅ Auto open popup AFTER zoom
+  map.once("moveend", () => {
+    detectClickedSites(feature);
+  });
+};
+
+
+
+
+
+
+
+
+
+const handleApply = () => {
+  if (!userselectedPolygon) return;
+
+  isDrawingRef.current = false;
+
+  drawAndZoomSelectedPolygon(userselectedPolygon);
+  setShowPolygonList(false);
+};
+
+
+
+
+
+
+
+
+
+  // *** FUNCTION 11: LOAD EXISTING POLYGONS ***
+  const loadExistingPolygons = async () => {
+  const token = checkCookieExpiration().userData.token;
+  if (!token) {
+    alert("Session expired. Please login again.");
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/user_polygon_list`,
+      {
+        headers: { Authorization: `Token ${token}` },
+      }
+    );
+
+    const data = await response.json();
+    console.log(data, "polygons data");
+
+    if (data.success && data.results) {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      // 🔴 Remove previous polygon layers and source
+      if (map.getLayer("user-polygons-fill")) {
+        map.removeLayer("user-polygons-fill");
+      }
+      if (map.getLayer("user-polygons-outline")) {
+        map.removeLayer("user-polygons-outline");
+      }
+      if (map.getSource("user-polygons")) {
+        map.removeSource("user-polygons");
+      }
+
+      // Generate features with unique color for each
+      const features = data.results
+        .map((item, idx) => {
+          // Generate a unique color using HSL or any method
+          const color = `hsl(${(idx * 50) % 360}, 70%, 50%)`; // different hue for each
+
+          // Case 1: GeoJSON feature exists
+          if (item.site_data?.feature) {
+            return {
+              ...item.site_data.feature,
+              id: item.id,
+              properties: {
+                ...item.site_data.feature.properties,
+                zone_id: item.zone_id,
+                country: item.country,
+                color, // add dynamic color here
+              },
+            };
+          }
+
+          // Case 2: Array of coordinates
+          if (Array.isArray(item.site_data) && item.site_data.length > 2) {
+            const points = item.site_data.map((s) => [s.LONGITUDE, s.LATITUDE]);
+            if (
+              points[0][0] !== points[points.length - 1][0] ||
+              points[0][1] !== points[points.length - 1][1]
+            ) {
+              points.push(points[0]); // close polygon
+            }
+
+            const polygon = turf.polygon([points], {
+              zone_id: item.zone_id,
+              id: item.id,
+              color, // add dynamic color here
+            });
+            polygon.id = item.id;
+            return polygon;
+          }
+
+          return null;
+        })
+        .filter((f) => f !== null);
+
+      if (features.length === 0) {
+        console.warn("No valid polygons found");
+        return;
+      }
+
+      // 🟢 Add GeoJSON source
+      map.addSource("user-polygons", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features,
+        },
+      });
+
+      // Fill layer with data-driven color
+      map.addLayer({
+        id: "user-polygons-fill",
+        type: "fill",
+        source: "user-polygons",
+        paint: {
+          "fill-color": ["get", "color"], // use the feature's 'color' property
+          "fill-opacity": 0.5,
+        },
+      });
+
+      // Outline layer
+      map.addLayer({
+        id: "user-polygons-outline",
+        type: "line",
+        source: "user-polygons",
+        paint: {
+          "line-color": "#000000",
+          "line-width": 1.5,
+        },
+      });
+
+      console.log("✅ Polygons loaded successfully with unique colors");
+    } else {
+      console.warn("No polygons found");
+    }
+  } catch (err) {
+    console.error("Error loading polygons:", err);
+    alert("Error loading polygons");
+  }
+};
+
   const rebuildMapSourcesAndLayers = () => {
     console.log("🟠 rebuildMapSourcesAndLayers() called");
 
@@ -723,60 +2017,91 @@ const findRepresentativeCell = (props, geojsonData) => {
       }
       // ⭐ ADD THIS: Global polygon loader for uploaded ZIP shapefile
       window.loadPolygonLayer = function (geojson) {
-        console.log("🌍 Loading custom polygon layer...", geojson);
+      console.log("🌍 Loading custom polygon layer...", geojson);
 
-        const map = mapInstance.current;
-        if (!map) {
-          console.error("❌ Map not ready");
-          return;
-        }
+      const map = mapInstance.current;
+      if (!map) {
+        console.error("❌ Map instance is not ready.");
+        return;
+      }
 
-        // Remove old layer/source if present
-        if (map.getLayer("custom-polygon-fill"))
-          map.removeLayer("custom-polygon-fill");
-        if (map.getLayer("custom-polygon-outline"))
-          map.removeLayer("custom-polygon-outline");
-        if (map.getSource("custom-polygon-source"))
-          map.removeSource("custom-polygon-source");
+      // Remove old layers and sources if they exist
+      if (map.getLayer("custom-polygon-fill")) {
+        map.removeLayer("custom-polygon-fill");
+      }
+      if (map.getLayer("custom-polygon-outline")) {
+        map.removeLayer("custom-polygon-outline");
+      }
+      if (map.getSource("custom-polygon-source")) {
+        map.removeSource("custom-polygon-source");
+      }
 
-        // Add fresh source
-        map.addSource("custom-polygon-source", {
-          type: "geojson",
-          data: geojson,
-        });
+      // Add a new GeoJSON source
+      map.addSource("custom-polygon-source", {
+        type: "geojson",
+        data: geojson,
+      });
 
-        // Fill layer
+      // Verify GeoJSON source
+      const source = map.getSource("custom-polygon-source");
+      if (source) {
+        console.log("✅ GeoJSON source loaded:", source._data);
+      } else {
+        console.error("❌ GeoJSON source not found.");
+        return;
+      }
+
+      // Inspect GeoJSON features
+      geojson.features.forEach((feature) => {
+        console.log("Feature Geometry:", feature.geometry);
+        console.log("Feature Properties:", feature.properties);
+      });
+
+      const fillColorExpression = buildMatchExpression(geojson);
+
+      // Add the fill layer with static color
+      try {
         map.addLayer({
           id: "custom-polygon-fill",
           type: "fill",
           source: "custom-polygon-source",
           paint: {
-            "fill-color": "#0080ff",
-            "fill-opacity": 0.25,
+            "fill-color": fillColorExpression,
+            "fill-opacity": 0.8, 
           },
         });
+        console.log("✅ Fill layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding fill layer:", error);
+      }
 
-        // Outline layer
+      // Add the outline layer
+      try {
         map.addLayer({
           id: "custom-polygon-outline",
           type: "line",
           source: "custom-polygon-source",
           paint: {
-            "line-color": "#0040ff",
+            "line-color": "#ff40ff",
             "line-width": 2,
           },
         });
+        console.log("✅ Outline layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding outline layer:", error);
+      }
 
-        // Auto zoom
-        try {
-          const bbox = turf.bbox(geojson);
-          map.fitBounds(bbox, { padding: 40 });
-        } catch (e) {
-          console.warn("Could not fit polygon bbox:", e);
-        }
+      
 
-        console.log("✅ Custom polygon rendered.");
-      };
+
+      // Auto zoom to fit the polygon bounds
+      try {
+        const bbox = turf.bbox(geojson); // Calculate bounding box using Turf.js
+        map.fitBounds(bbox, { padding: 40 });
+      } catch (error) {
+        console.warn("⚠️ Could not fit polygon bounding box:", error);
+      }
+    };
 
       // highlighted feature
       if (!map.getLayer("highlighted-feature-layer")) {
@@ -959,6 +2284,7 @@ setShowInfoPanel(true);
       if (map.getSource("sectors")) map.getSource("sectors").setData(empty);
       return;
     }
+    
 
     const features = geojsonData.features;
     const tableTypeLower = (tableType || "").toLowerCase();
@@ -968,6 +2294,7 @@ setShowInfoPanel(true);
     const isCmRemarks =
       tableTypeLower.includes("cm change") &&
       cmColorColumn.trim().toLowerCase() === "remarks";
+      
 
     // 0) Precompute CM buckets (global) if needed (ONLY when NOT remarks mode)
     let cmBands = cmLegend && cmLegend.length ? cmLegend : null;
@@ -1013,108 +2340,137 @@ setShowInfoPanel(true);
 
     const sectorFeatures = [];
 
-    // 🌈 GENERATION FAN MODE (if any feature has "generation")
-    const hasGeneration = features.some((f) => f.properties?.generation);
+        // 🌈 GENERATION FAN MODE (FIXED CONCENTRIC GENERATION RINGS)
+const hasGeneration = features.some((f) => f.properties?.generation);
+console.log("🧪 hasGeneration =", hasGeneration, {
+  expandBandMode,
+  legendMode,
+  totalFeatures: features.length,
+});
 
-    if (hasGeneration && !expandBandMode) {
-      const SLICE_SPANS = [
-        { start: 0, end: 60 },
-        { start: 120, end: 180 },
-        { start: 240, end: 300 },
-      ];
+if (hasGeneration && !expandBandMode) {
+  console.log("🚀 ENTERED FIXED GENERATION FAN MODE");
 
-      const bySite = {};
-      for (const f of features) {
-        const p = f.properties || {};
-        const site = String(getSiteId(p) || "").trim();
-        const gen = p.generation;
-        if (!site || !gen) continue;
-        if (!bySite[site]) bySite[site] = [];
-        bySite[site].push(f);
-      }
+  const SLICE_SPANS = [
+    { start: 0, end: 60 },
+    { start: 120, end: 180 },
+    { start: 240, end: 300 },
+  ];
 
-      const GEN_ORDER = ["2G", "3G", "4G", "5G"];
-      const totalRadius = radiusScale;
-      const GAP_RATIO = 0.12;
+  // 🔒 FIXED generation order (inner → outer)
+  const GEN_ORDER = ["5G", "4G", "3G", "2G"];
 
-      Object.entries(bySite).forEach(([site, feats]) => {
-        const gensAtSite = Array.from(
-          new Set(feats.map((f) => f.properties.generation))
-        );
-        const ordered = GEN_ORDER.filter((g) => gensAtSite.includes(g));
-        if (!ordered.length) return;
+  // 🔒 FIXED relative radii (scaled by radiusScale)
+  const GEN_RADII = {
+    "5G": { inner: 0.0, outer: 1.0 },
+    "4G": { inner: 1.0, outer: 2.5 },
+    "3G": { inner: 2.5, outer: 4.5 },
+    "2G": { inner: 4.5, outer: 7.0 },
+  };
 
-        // compute centroid
-        const cents = feats.map((f) => turf.centroid(f).geometry.coordinates);
-        const cx = cents.reduce((s, c) => s + c[0], 0) / cents.length;
-        const cy = cents.reduce((s, c) => s + c[1], 0) / cents.length;
-        const center = [cx, cy];
+  // --- Group features by site ---
+  const bySite = {};
+  features.forEach((f) => {
+    const p = f.properties || {};
+    const site = String(getSiteId(p) || "").trim();
+    const gen = String(p.generation || "").toUpperCase();
+    if (!site || !gen) return;
+    if (!bySite[site]) bySite[site] = [];
+    bySite[site].push(f);
+  });
 
-        const ringCount = ordered.length;
-        const thickness = totalRadius / ringCount;
-        const gap = thickness * GAP_RATIO;
+  Object.entries(bySite).forEach(([site, feats]) => {
+    console.log("🏠 Site:", site, {
+      totalFeats: feats.length,
+      generations: Array.from(
+        new Set(feats.map((f) => f.properties?.generation))
+      ),
+    });
 
-        let outerR = totalRadius;
+    // 📍 Site centroid
+    const cents = feats.map((f) => turf.centroid(f).geometry.coordinates);
+    const cx = cents.reduce((s, c) => s + c[0], 0) / cents.length;
+    const cy = cents.reduce((s, c) => s + c[1], 0) / cents.length;
+    const center = [cx, cy];
 
-        ordered.forEach((gen) => {
-          const color =
-            generationColorMap[gen] || GENERATION_COLORS[gen] || "#777";
-          const innerR = Math.max(0.005, outerR - (thickness - gap));
+    // Group by generation
+    const byGen = {};
+    feats.forEach((f) => {
+      const g = String(f.properties?.generation || "").toUpperCase();
+      if (!byGen[g]) byGen[g] = [];
+      byGen[g].push(f);
+    });
 
-          SLICE_SPANS.forEach((span) => {
-            const wedge = createRingSlice(
-              center,
-              innerR,
-              outerR,
-              span.start,
-              span.end
-            );
+    // 🎯 Draw generations deterministically (inner → outer)
+    GEN_ORDER.forEach((gen) => {
+      const genFeats = byGen[gen];
+      if (!genFeats || !genFeats.length) return;
 
-            const ref = feats[0].properties || {};
-            const ct = turf.centroid(feats[0]).geometry.coordinates;
+      const R = GEN_RADII[gen];
+      const innerR = R.inner * radiusScale;
+      const outerR = R.outer * radiusScale;
 
-            sectorFeatures.push({
-              type: "Feature",
-              geometry: wedge.geometry,
-              properties: {
-                ...ref,
-                site_id: site,
-                generation: gen,
-                color,
-                fillColor: color,
-                lat: ref.lat || ref.Lat || ct[1],
-                lon: ref.lon || ref.Long || ct[0],
-              },
-            });
-          });
+      const color =
+        generationColorMap[gen] || GENERATION_COLORS[gen] || "#777";
 
-          outerR = innerR - gap;
-        });
+      console.log("🌀 Drawing generation", gen, {
+        site,
+        innerR,
+        outerR,
       });
 
-      // push data to map
-      const fc = { type: "FeatureCollection", features: sectorFeatures };
-      sectorsRef.current = fc;
-      if (map.getSource("sectors")) {
-        map.getSource("sectors").setData(fc);
-      }
+      SLICE_SPANS.forEach((span) => {
+        const wedge = createRingSlice(
+          center,
+          innerR,
+          outerR,
+          span.start,
+          span.end
+        );
 
-      setLegendMode("generation");
-      setShowLegend(true);
+        const ref = genFeats[0].properties || {};
+        const ct = turf.centroid(genFeats[0]).geometry.coordinates;
 
-      // Auto-zoom when DB changes
-      if (selectedDB && lastZoomedDB.current !== selectedDB) {
-        lastZoomedDB.current = selectedDB;
-        setTimeout(() => {
-          try {
-            const bbox = turf.bbox(fc);
-            map.fitBounds(bbox, { padding: 60, maxZoom: 15, essential: true });
-          } catch (e) {}
-        }, 300);
-      }
+        sectorFeatures.push({
+          type: "Feature",
+          geometry: wedge.geometry,
+          properties: {
+            ...ref,
+            site_id: site,
+            generation: gen,
+            color,
+            fillColor: color,
+            lat: ref.lat || ref.Lat || ct[1],
+            lon: ref.lon || ref.Long || ct[0],
+          },
+        });
+      });
+    });
+  });
 
-      return; // skip normal band rendering
-    }
+  // 🚀 Push to map
+  const fc = { type: "FeatureCollection", features: sectorFeatures };
+  sectorsRef.current = fc;
+  if (map.getSource("sectors")) {
+    map.getSource("sectors").setData(fc);
+  }
+
+  setLegendMode("generation");
+  setShowLegend(true);
+
+  // 🔍 Auto zoom on DB change
+  if (selectedDB && lastZoomedDB.current !== selectedDB) {
+    lastZoomedDB.current = selectedDB;
+    setTimeout(() => {
+      try {
+        const bbox = turf.bbox(fc);
+        map.fitBounds(bbox, { padding: 60, maxZoom: 15, essential: true });
+      } catch (e) {}
+    }, 300);
+  }
+
+  return; // ⛔ skip normal band rendering
+}
 
     // ⭐ FINAL — Balanced FIXED-RADIUS GEN + BAND MODE (perfect concentric)
     if (expandBandMode) {
@@ -2844,12 +4200,15 @@ setShowInfoPanel(true);
 
   return (
     <>
-      {/* 🔍 Search + Band Expander Toggle (top-right offset) */}
+      
+    
+      
+
       <div
         style={{
           position: "fixed",
           top: 10,
-          right: 320,
+          right: 420,
           zIndex: 10001,
           display: "flex",
           flexDirection: "column",
@@ -2905,7 +4264,7 @@ setShowInfoPanel(true);
           style={{
             position: "relative",
             top: 3, // ⬅ move down slightly
-            right: -378, // ⬅ move slightly to the right
+            right: -478, // ⬅ move slightly to the right
           }}
         >
           <button
@@ -3283,6 +4642,289 @@ setShowInfoPanel(true);
         >
           🔍
         </button> */}
+        {/* 🧱 Polygon Tool — SINGLE VISUAL UNIT */}
+<div
+  style={{
+    position: "relative",
+    width: 36,           // 🔒 fixed footprint (does NOT affect others)
+    height: 36,
+  }}
+>
+  {/* 🧩 SHARED BACKGROUND (makes it look ONE) */}
+  {/* <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      background: "#ffffff",
+      borderRadius: 10,
+      boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+      zIndex: 1,
+    }}
+  /> */}
+
+  {/* ⬟ MAIN BUTTON */}
+  <button
+    onClick={() => setShowPolygonPanel((v) => !v)}
+    className="icon-btn"
+    title="Polygon Tools"
+    style={{
+      position: "relative",
+      zIndex: 3,
+      color: "#dc2626",      // 🔴 red polygon
+      fontSize: 18,
+      fontWeight: 700,
+      background: showPolygonPanel ? "#80f3a2" : "#80f3a2", // light red when active
+      boxShadow: showPolygonPanel
+        ? "0 2px 8px rgba(220, 38, 38, 0.3)"
+        : "0 2px 6px rgba(0,0,0,0.12)",
+      transition: "background 0.2s, box-shadow 0.2s",
+      width: 36,
+      height: 36,
+      
+    }}
+  >
+    ⬟
+  </button>
+
+  {/* 🔧 EXPANDED TOOLS — SAME VISUAL SURFACE */}
+  <div
+    style={{
+      position: "absolute",
+      right: "100%",               // ⬅ expand LEFT
+      top: "50%",
+      transform: showPolygonPanel
+        ? "translateY(-50%)"
+        : "translateY(-50%) scaleX(0.85)",
+      transformOrigin: "right center",
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "6px 8px",
+      background: "#ffffff",       // SAME background
+      borderRadius: 10,
+      boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+      opacity: showPolygonPanel ? 1 : 0,
+      pointerEvents: showPolygonPanel ? "auto" : "none",
+      transition: "opacity 0.18s ease, transform 0.18s ease",
+      zIndex: 2,
+    }}
+  >
+    <button
+      onClick={() => activateTool("draw_polygon")}
+      className="icon-btn"
+      title="Draw Polygon"
+    >
+      <Pentagon size={16} />
+    </button>
+
+    <button
+      onClick={() => activateTool("draw_freehand")}
+      className="icon-btn"
+      title="Freehand Draw"
+    >
+      <Pencil size={16} />
+    </button>
+
+    <button
+      onClick={() => {
+        drawRef.current?.deleteAll();
+        setPolygonCount(0);
+      }}
+      className="icon-btn"
+      title="Clear Polygons"
+    >
+      <Trash2 size={16} />
+    </button>
+
+
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setShowPolygonList((v) => !v)}
+        className="icon-btn"
+        title="Saved Zones"
+      >
+        <Save size={16} />
+      </button>
+      <>
+      {/* Open main polygon popup */}
+      {showPolygonList && (
+        <div className="polygon-overlay" onClick={() => setShowPolygonList(false)}>
+          <div className="polygon-modal" onClick={(e) => e.stopPropagation()}>
+            {/* BODY */}
+            <div className="polygon-body">
+              {/* LEFT PANEL — PROJECT */}
+              <div className="polygon-panel project-panel">
+                Project Specific Polygon List
+
+                {/* ===== SHP POPUP INSIDE LEFT PANEL ===== */}
+                {showShpPopup && (
+                  <div className="shp-popup-inside-panel">
+                    <h4>Select SHP File</h4>
+                    <div className="shp-list">
+                      {polygonFiles.map((file) => (
+                        <div
+                          key={file}
+                          className={`shp-item ${selectedShpFile === file ? "active" : ""}`}
+                          onClick={() => setSelectedShpFile(file)}
+                        >
+                          {file}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="shp-footer">
+                      <button
+                        className="btnStyle"
+                        disabled={!selectedShpFile}
+                        onClick={() => {
+                          if (!selectedShpFile) return;
+                          fetchProjectZones(selectedShpFile);
+                        }}
+                      >
+                        Continue
+                      </button>
+                      <button className="btnStyle danger" onClick={() => setShowShpPopup(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ===== LIST ZONES AFTER SHP SELECT ===== */}
+                {listpolygon.length > 0 && (
+                  <div className="polygon-scroll">
+                    {projectZones.length > 0 && (
+              <div className="polygon-scroll">
+                {projectZones
+                  .slice()
+                  .sort((a, b) => {
+                    const idA = Number(a.id);
+                    const idB = Number(b.id);
+                    return idA - idB;
+                  })
+                  .map((lp, index) => (
+                    <div
+                      key={lp.id}
+                      className={`polygon-row ${
+                        selectedPolygon?.id === lp.id
+                          ? "active"
+                          : index % 2 === 0
+                          ? "even"
+                          : "odd"
+                      }`}
+                      onClick={() => setSelectedPolygon(lp)}
+                    >
+                 
+                      <div className="zone-id">{lp.zone_id}</div>
+                      <div className="zone-name">{lp.zone_name}</div>
+                     
+                    </div>
+                  ))}
+              </div>
+            )}
+
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT PANEL — USER */}
+              <div className="polygon-panel user-panel">
+                <div className="panel-title">User Specific Polygon List</div>
+                <div className="polygon-scroll">
+                  {listpolygon.map((lp, index) => (
+                    <div
+                      key={lp.id}
+                      className={`polygon-row ${
+                        userselectedPolygon?.id === lp.id
+                          ? "active"
+                          : index % 2 === 0
+                          ? "even"
+                          : "odd"
+                      }`}
+                      onClick={() => setUserSelectedPolygon(lp)}
+                    >
+                      <div className="zone-id">{lp.zone_id}</div>
+                      <div className="zone-name">{lp.zone_name}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+
+            {/* FOOTER */}
+            <div className="polygon-footer">
+              {/* LEFT FOOTER */}
+              <div className="footer-section">
+                {userRole === "USER" && (
+                  <div className="project-footer">
+                    <button className="btnStyle primary" onClick={onButtonClick}>
+                      Choose File
+                    </button>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handlePolygonZipUpload}
+                      accept=".zip"
+                      className="hidden-input"
+                    />
+
+                    <button
+                    className="btnStyle primary"
+                    disabled={!selectedPolygon}
+                    onClick={() => {
+                      const geojson = {
+                        type: "FeatureCollection",
+                        features: [
+                          {
+                            type: "Feature",
+                            geometry: selectedPolygon.geometry,
+                            properties: {
+                              id: selectedPolygon.id,
+                              zone_id: selectedPolygon.zone_id,
+                              zone_name: selectedPolygon.zone_name,
+                            },
+                          },
+                        ],
+                      };
+
+                      console.log("📦 Final GeoJSON:", geojson);
+
+                      window.loadPolygonLayer(geojson);
+                      setShowPolygonList(false)
+                    }}
+                  >
+                    Upload
+                  </button>
+
+
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT FOOTER */}
+              <div className="footer-section">
+                <button
+                  className="btnStyle secondary"
+                  onClick={() => {handleApply(userselectedPolygon),console.log(userselectedPolygon) }}
+                  disabled={!userselectedPolygon}
+                >
+                  Apply
+                </button>
+                <button className="btnStyle danger" onClick={() => setShowPolygonList(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+</div>
+  </div> 
+</div>
+
+        
       </div>
 
       {/* Distance box for ruler */}
