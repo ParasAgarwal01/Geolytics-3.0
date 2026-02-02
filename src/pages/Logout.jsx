@@ -12,7 +12,7 @@ const Logout = () => {
         // sessionStorage.clear();
         Cookies.remove('userInfo', { path: '/' });
 
-        navigate("/login")
+        navigate("/auth/login")
     }, []);
 
     return (

@@ -13,13 +13,9 @@ import Papa from "papaparse";
 import { Pentagon, Pencil, Trash2, Save } from "lucide-react";
 import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
 // import { getEnabledFeatures } from "../Utils/cookieUtils";
-<<<<<<< HEAD
 import {getToken, checkCookieExpiration,isUserLoggedIn } from "./CookiesUtils";
 import { redirectToLogin } from "./Logout";
 
-=======
-import { getEnabledFeatures, getToken } from "./CookiesUtils";
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
@@ -241,7 +237,6 @@ const createSectorPolygonFeature = (
     return colors;
   };
   
-<<<<<<< HEAD
   // const buildMatchExpression = (geojson) => {
   //   const zones = [...new Set(geojson.features.map(f => f.properties.B4_Polygon))];
   //   const colors = generateColors(zones);
@@ -269,18 +264,6 @@ const createSectorPolygonFeature = (
   return expression;
 };
 
-=======
-  const buildMatchExpression = (geojson) => {
-    const zones = [...new Set(geojson.features.map(f => f.properties.B4_Polygon))];
-    const colors = generateColors(zones);
-    const expression = ['match', ['get', 'B4_Polygon']];
-    zones.forEach(zone => {
-      expression.push(zone, colors[zone]);
-    });
-    expression.push('#cccccc');
-    return expression;
-  };
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
 
 
@@ -518,14 +501,8 @@ useEffect(() => {
   const [infoSource, setInfoSource] = useState({});
   const [infoTarget, setInfoTarget] = useState({});
 
-<<<<<<< HEAD
   //  POLYGON DRAWING & SITE DETECTION SECTION
 
-=======
-  // 🎨 POLYGON DRAWING & SITE DETECTION SECTION
-
-  // --- STATE VARIABLES FOR DRAWING ---
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
   const drawRef = useRef(null);                           // MapboxDraw instance
   const popupRef = useRef(null);                          // Mapbox Popup instance
   const currentMatchedSitesRef = useRef([]);              // Sites matched in polygon
@@ -537,7 +514,6 @@ useEffect(() => {
   const [pendingMode, setPendingMode] = useState(null);   // Pending draw mode
   const [polygonCount, setPolygonCount] = useState(0);    // Counter for zone IDs
   const [selectedCountry, setSelectedCountry] = useState(null);  // Selected country
-<<<<<<< HEAD
   const [listpolygon,setListpolygon] = useState([])
   const [userselectedPolygon, setUserSelectedPolygon] = useState(null);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -558,10 +534,6 @@ useEffect(() => {
   const username = checkCookieExpiration().userData?.first_name || "User";
   // console.log(checkCookieExpiration(),'cookies')
   const userRole = checkCookieExpiration().userData?.role || 'User';
-=======
-
-  const username = getEnabledFeatures()?.first_name || "User";
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
   // --- COUNTRY COORDINATES FOR MAP FLYTO ---
   const countryCoordinates = {
@@ -612,7 +584,6 @@ useEffect(() => {
     };
   }, [mapInstance]);
 
-<<<<<<< HEAD
 
 useEffect(() => {
   console.log("Auth check useEffect running");
@@ -968,57 +939,11 @@ const initializeDrawingTools = (map) => {
 
 
  
-=======
-  // *** FUNCTION 1: INITIALIZE DRAWING TOOLS ***
-  const initializeDrawingTools = (map) => {
-    if (drawRef.current) {
-      console.log("✅ Draw already initialized, skipping");
-      return;
-    }
-
-    console.log("🔧 Starting Draw initialization...");
-
-    try {
-      const draw = new MapboxDraw({
-        displayControlsDefault: false,
-        controls: {
-          polygon: false,
-          trash: false,
-        },
-        modes: {
-          ...MapboxDraw.modes,
-          draw_circle: CircleMode,
-          draw_freehand: FreehandMode,
-        },
-      });
-
-      // Add to map FIRST
-      map.addControl(draw);
-      console.log("✅ Draw control added to map");
-
-      // THEN set ref
-      drawRef.current = draw;
-      console.log("✅ drawRef.current is now set");
-
-      // Setup event listeners
-      setupDrawingListeners(map, draw);
-      console.log("✅ Event listeners attached");
-
-      // Load existing polygons
-      loadExistingPolygons();
-      console.log("✅ Attempted to load existing polygons");
-    } catch (error) {
-      console.error("❌ Error initializing Draw:", error);
-      drawRef.current = null;
-    }
-  };
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
   const setupDrawingListeners = (map, draw) => {
     console.log("🎯 Setting up drawing listeners...");
 
     // Mode change listener
-<<<<<<< HEAD
 map.on("draw.modechange", (e) => {
   const mode = draw.getMode();
   isDrawingRef.current = mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"));
@@ -1111,37 +1036,6 @@ map.on("draw.create", (e) => {
       
 
 
-=======
-    map.on("draw.modechange", (e) => {
-      const mode = draw.getMode();
-      console.log("📍 Drawing mode changed to:", mode);
-      isDrawingRef.current = mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"));
-      
-      // Set cursor when mode changes
-      if (isDrawingRef.current) {
-        const canvas = map.getCanvas();
-        if (canvas) {
-          canvas.style.cursor = "crosshair";
-          console.log("✅ Cursor set to crosshair on mode change");
-        }
-      }
-    });
-
-    // Draw create listener - set zone ID on new polygon
-    map.on("draw.create", (e) => {
-      if (!e.features || e.features.length === 0) return;
-      const feature = e.features[0];
-      if (!feature || !feature.id) return;
-
-      setPolygonCount((prev) => {
-        const countryPrefix = "west";
-        const zoneId = `${countryPrefix}_${prev}_${username}`;
-        draw.setFeatureProperty(feature.id, "zone_id", zoneId);
-        currentActiveZoneIdRef.current = zoneId;
-        return prev + 1;
-      });
-    });
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
     map.on("draw.update", handleDrawingComplete);
 
@@ -1190,30 +1084,12 @@ map.on("draw.create", (e) => {
     };
   };
 
-<<<<<<< HEAD
 
-=======
-  // *** FUNCTION 3: ACTIVATE TOOL ***
-  // Activates polygon or freehand drawing mode
-  // ❌ COUNTRY POPUP COMMENTED OUT - Direct drawing start
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
   const activateTool = (mode) => {
     
     
-<<<<<<< HEAD
 
-=======
-    // ❌ COMMENTED OUT: Country popup check
-    // If country not selected, show popup first
-    // if (!selectedCountry) {
-    //   setPendingMode(mode);
-    //   openCountryPopup();
-    //   return;
-    // }
-
-    // Country already selected, activate directly
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
     if (!drawRef.current) {
       setTimeout(() => {
         if (drawRef.current) {
@@ -1256,40 +1132,6 @@ map.on("draw.create", (e) => {
     }
   };
 
-<<<<<<< HEAD
-=======
-  // *** FUNCTION 4: OPEN COUNTRY POPUP ***
-  // Displays country selection modal for first-time activation
-  const openCountryPopup = () => {
-    console.log("🌍 Opening country selection popup");
-    setShowCountryPopup(true);
-  };
-
-  // *** FUNCTION 5: HANDLE COUNTRY SELECT ***
-  const handleCountrySelect = (country) => {
-    console.log(`📍 Selected country: ${country}`);
-    const { coords, prefix } = countryCoordinates[country];
-    const map = mapInstance.current;
-
-    // Save selected country
-    setSelectedCountry(country);
-
-    if (map) {
-      map.flyTo({
-        center: coords,
-        zoom: 5,
-        duration: 2000,
-      });
-    }
-
-    setShowCountryPopup(false);
-    setTimeout(() => {
-      console.log("🎯 Activating drawing tool now...");
-      activateTool(pendingMode || "draw_polygon");
-    }, 2500);
-  };
-
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
   const handleDrawingComplete = () => {
     console.log("✏️ Drawing completed");
     if (!drawRef.current) return;
@@ -1441,7 +1283,6 @@ map.on("draw.create", (e) => {
     }, 0);
   };
 
-<<<<<<< HEAD
 
 const handleMapClick = (e) => {
   const map = mapInstance.current;
@@ -1484,43 +1325,6 @@ const handleMapClick = (e) => {
 
 
 
-=======
-  const handleMapClick = (e) => {
-    const map = mapInstance.current;
-    const draw = drawRef.current;
-    if (!map || !draw) return;
-
-    // Skip if currently drawing
-    const mode = draw.getMode();
-    if (mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"))) {
-      console.log("⏸ Still drawing, skipping polygon click");
-      return;
-    }
-
-    // Get clicked features from draw layer
-    const ids = draw.getFeatureIdsAt(e.point);
-    if (!ids || ids.length === 0) {
-      console.log(" No polygon clicked");
-      if (popupRef.current) {
-        popupRef.current.remove();
-      }
-      // Reset cursor to default
-      map.getCanvas().style.cursor = "default";
-      return;
-    }
-
-    // Get the clicked feature
-    const feature = draw.get(ids[0]);
-    if (!feature || !feature.geometry || feature.geometry.type !== "Polygon") {
-      console.log(" Clicked feature is not a polygon");
-      return;
-    }
-
-    console.log("✅ Polygon clicked:", feature);
-    map.getCanvas().style.cursor = "pointer";
-    detectClickedSites(feature);
-  };
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
   // *** FUNCTION 6: SETUP CURSOR HANDLING ***
   const setupCursorHandling = (map, draw) => {
@@ -1562,57 +1366,34 @@ const handleMapClick = (e) => {
   // *** FUNCTION 10: HANDLE SUBMIT TO BACKEND ***
  
   const handleSubmitToBackend = async () => {
-<<<<<<< HEAD
     const token = checkCookieExpiration().userData.token
     if (!token) {
       toast.error("Session expired. Please login again.");
       redirectToLogin();
-=======
-    const token = getToken();
-    if (!token) {
-      alert("Session expired. Please login again.");
-      window.location.reload();
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
       return;
     }
 
     const draw = drawRef.current;
     if (!draw) {
-<<<<<<< HEAD
       toast.error("Drawing tools not ready");
-=======
-      alert("Drawing tools not ready");
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
       return;
     }
 
     const zoneId = currentActiveZoneIdRef.current;
     const sites = currentMatchedSitesRef.current;
 
-<<<<<<< HEAD
     console.log(zoneId,'z')
 
     if (!zoneId) {
       toast.error("No zone ID set");
-=======
-    if (!zoneId) {
-      alert("No zone ID set");
-      return;
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
     }
 
     const allFeatures = draw.getAll().features;
     const currentPolygon = allFeatures.find((f) => f.properties?.zone_id === zoneId);
-<<<<<<< HEAD
     console.log(currentPolygon,'hj')
 
     if (!currentPolygon) {
       toast.error("Could not find the polygon geometry to save.");
-=======
-
-    if (!currentPolygon) {
-      alert("Could not find the polygon geometry to save.");
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
       return;
     }
 
@@ -1628,7 +1409,6 @@ const handleMapClick = (e) => {
 
     console.log(payload, "payload");
 
-<<<<<<< HEAD
 
   const savePromise = fetch(
       `${import.meta.env.VITE_API_URL}/geo-api/polygon/save_polygon`,
@@ -1930,280 +1710,6 @@ const handleApply = () => {
     alert("Error loading polygons");
   }
 };
-=======
-    try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/geolytics/geo-api/polygon/save_polygon",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Token ${token}`,
-          },
-          body: JSON.stringify(payload),
-        }
-      );
-
-      if (response.ok) {
-        alert("✅ Polygon and geometry saved successfully");
-      } else {
-        alert("❌ Server error");
-      }
-    } catch (err) {
-      alert("❌ Network error");
-      console.error("Error:", err);
-    }
-  };
-
-  // *** FUNCTION 11: LOAD EXISTING POLYGONS ***
-  const loadExistingPolygons = async () => {
-    const token = getToken();
-    if (!token) {
-      alert("Session expired. Please login again.");
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        "http://127.0.0.1:8000/api/geolytics/geo-api/polygon/user_polygon_list",
-        {
-          headers: { Authorization: `Token ${token}` },
-        }
-      );
-
-      const data = await response.json();
-      console.log(data, "polygons data");
-
-      if (data.success && data.results) {
-        const draw = drawRef.current;
-        if (!draw) return;
-
-        draw.deleteAll();
-
-        const features = data.results
-          .map((item) => {
-            if (item.site_data && item.site_data.feature) {
-              return {
-                ...item.site_data.feature,
-                id: item.id,
-                properties: {
-                  ...item.site_data.feature.properties,
-                  zone_id: item.zone_id,
-                  country: item.country,
-                },
-              };
-            }
-
-            if (Array.isArray(item.site_data) && item.site_data.length > 2) {
-              const points = item.site_data.map((s) => [
-                s.LONGITUDE,
-                s.LATITUDE,
-              ]);
-              if (points[0][0] !== points[points.length - 1][0]) {
-                points.push(points[0]);
-              }
-              return turf.polygon([points], {
-                zone_id: item.zone_id,
-                id: item.id,
-              });
-            }
-
-            return null;
-          })
-          .filter((f) => f !== null);
-
-        draw.add({
-          type: "FeatureCollection",
-          features,
-        });
-
-        console.log("✅ Polygons loaded successfully");
-      } else {
-        console.warn("No polygons found");
-      }
-    } catch (err) {
-      console.error("Error loading polygons:", err);
-      alert("Error loading polygons");
-    }
-  };
-
-
-  // UI COMPONENTS FOR POLYGON DRAWING
-  const drawingUI = (
-    <div style={{
-      position: "absolute",
-      top: "30px",
-      right: "50px",
-      backgroundColor: "white",
-      borderRadius: "8px",
-      boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
-      padding: "5px",
-      display: "flex",
-      // flexDirection: "column",
-      gap: "4px",
-      zIndex: 10,
-    }}>
-      <button
-        onClick={() => activateTool("draw_polygon")}
-        title="Draw Polygon"
-        style={{
-          padding: "5px",
-          borderRadius: "4px",
-          border: "1px solid #d1d5db",
-          cursor: "pointer",
-          // backgroundColor: "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Pentagon size={15} />
-      </button>
-      <button
-        onClick={() => activateTool("draw_freehand")}
-        title="Draw Freehand"
-        style={{
-          padding: "5px",
-          borderRadius: "4px",
-          border: "1px solid #d1d5db",
-          cursor: "pointer",
-          backgroundColor: "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Pencil size={15} />
-      </button>
-      <button
-        onClick={() => {
-          if (drawRef.current) {
-            drawRef.current.deleteAll();
-            setPolygonCount(0);
-          }
-        }}
-        title="Clear All"
-        style={{
-          padding: "5px",
-          borderRadius: "4px",
-          border: "1px solid #d1d5db",
-          cursor: "pointer",
-          backgroundColor: "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Trash2 size={15} />
-      </button>
-      <button
-        onClick={() => loadExistingPolygons()}
-        title="Load Saved Polygons"
-        style={{
-          padding: "5px",
-          borderRadius: "4px",
-          border: "1px solid #d1d5db",
-          cursor: "pointer",
-          backgroundColor: "#f3f4f6",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <Save size={15} />
-      </button>
-      {selectedCountry && (
-        <button
-          onClick={() => {
-            setSelectedCountry(null);
-            setTimeout(() => openCountryPopup(), 0);
-          }}
-          title="Change Country"
-          style={{
-            padding: "10px 12px",
-            borderRadius: "6px",
-            border: "1px solid #fbbf24",
-            cursor: "pointer",
-            backgroundColor: "#fef3c7",
-            fontSize: "12px",
-            fontWeight: "600",
-            color: "#92400e",
-            transition: "all 0.2s",
-          }}
-          onMouseOver={(e) => e.target.style.backgroundColor = "#fcd34d"}
-          onMouseOut={(e) => e.target.style.backgroundColor = "#fef3c7"}
-        >
-          🌍 {selectedCountry}
-        </button>
-      )}
-    </div>
-  );
-
-  // 🗺️ COUNTRY SELECTION POPUP
-  // Modal that appears when user first clicks polygon/freehand button
-  // Shows UK, USA, India options
-  // On selection: saves country, animates map to coordinates, activates drawing tool
-  // Has "Change Country" button visible in toolbar after selection
-  const countryPopup = showCountryPopup && (
-    <div style={{
-      position: "fixed",
-      top: 0,
-      left: 0,
-      width: "100%",
-      height: "100%",
-      backgroundColor: "rgba(0,0,0,0.5)",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1000,
-    }}>
-      <div style={{
-        backgroundColor: "white",
-        borderRadius: "8px",
-        padding: "24px",
-        maxWidth: "400px",
-        boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
-      }}>
-        <h2 style={{ marginTop: 0, marginBottom: "16px" }}>Select Country</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {Object.keys(countryCoordinates).map((country) => (
-            <button
-              key={country}
-              onClick={() => handleCountrySelect(country)}
-              style={{
-                padding: "12px",
-                backgroundColor: "#3b82f6",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-                fontSize: "14px",
-              }}
-            >
-              {country}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={() => setShowCountryPopup(false)}
-          style={{
-            marginTop: "12px",
-            padding: "8px",
-            backgroundColor: "#ef4444",
-            color: "white",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-            width: "100%",
-            fontSize: "12px",
-          }}
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  );
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
   const rebuildMapSourcesAndLayers = () => {
     console.log("🟠 rebuildMapSourcesAndLayers() called");
@@ -2589,55 +2095,8 @@ const findRepresentativeCell = (props, geojsonData) => {
         console.error(" Error adding outline layer:", error);
       }
 
-<<<<<<< HEAD
       
 
-=======
-      useEffect(() => {
-        if (!mapInstance.current || drawRef.current) return;
-
-        const draw = new MapboxDraw({
-          displayControlsDefault: false,
-          userProperties: true,
-          modes: {
-            ...MapboxDraw.modes,
-            draw_circle: CircleMode,
-            draw_freehand: FreehandMode,
-          },
-          styles: [
-            // Default Mapbox Draw styles or custom styles here
-            {
-              id: 'gl-draw-polygon-fill-inactive',
-              type: 'fill',
-              filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
-              paint: { 'fill-color': '#3bb2d0', 'fill-opacity': 0.2 }
-            },
-            {
-              id: 'gl-draw-polygon-stroke-active',
-              type: 'line',
-              filter: ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
-              paint: { 'line-color': '#fbb03b', 'line-dasharray': [0.2, 2], 'line-width': 2 }
-            }
-          ]
-        });
-
-        mapInstance.current.addControl(draw);
-        drawRef.current = draw;
-
-        // Event Listeners
-        mapInstance.current.on('draw.create', handleDrawCreate);
-        mapInstance.current.on('draw.modechange', (e) => {
-          setIsDrawing(e.mode !== 'simple_select');
-        });
-
-        return () => {
-          if (mapInstance.current && drawRef.current) {
-            mapInstance.current.removeControl(drawRef.current);
-          }
-        };
-      }, [mapInstance.current]);
-
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
       // Auto zoom to fit the polygon bounds
       try {
@@ -4745,18 +4204,10 @@ setShowInfoPanel(true);
 
   return (
     <>
-<<<<<<< HEAD
       
     
       
 
-=======
-      {/* Drawing UI */}
-      {drawingUI}
-      {countryPopup}
-      
-      {/* 🔍 Search + Band Expander Toggle (top-right offset) */}
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
       <div
         style={{
           position: "fixed",

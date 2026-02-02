@@ -115,7 +115,7 @@ const Navbar = () => {
                             <i className="fas fa-user person-icon"></i>
                         </a>
                         <ul className="dropdown-menu dropdown-menu-end">
-                            <li><a className="dropdown-item" href="/auth/profile">Profile</a></li>
+                            <li><a className="dropdown-item" href="http://10.164.167.122/auth/user_information">Profile</a></li>
                             <li><a className="dropdown-item" href="/auth/change_password">Change Password</a></li>
                             <li>
                                 <hr className="dropdown-divider" />

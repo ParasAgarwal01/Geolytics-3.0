@@ -1,5 +1,4 @@
 import Cookies from 'js-cookie';
-<<<<<<< HEAD
 import { redirectToLogin } from './Logout';
 
 // COOKIE CHECKING UTILITIES
@@ -66,7 +65,7 @@ export function getCSRFToken() {
 export function isUserLoggedIn() {
   return checkCookieExpiration().isValid;
 }
-=======
+
 
 
 export const getEnabledFeatures =()=>{
@@ -81,12 +80,19 @@ export const getEnabledFeatures =()=>{
     }
 }
 
-export function getToken() {
-    try {
-        const userInfo = JSON.parse(Cookies.get("userInfo") || "{}");
-        return userInfo.token || '';
-    } catch (err) {
-        return '';
-    }
-}
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
+// navigation.js
+
+const TARGET_IP = "10.164.167.122"; 
+
+
+export const redirectToProfile = (e) => {
+  if (e) e.preventDefault(); 
+  
+  const targetUrl = `http://${TARGET_IP}/auth/user_information`;
+  
+  window.location.href = targetUrl;
+};
+
+
+
+

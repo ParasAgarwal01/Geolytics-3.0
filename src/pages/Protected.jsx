@@ -6,7 +6,7 @@ const ProtectedRoute = ({ children }) => {
     const isAuthenticated = !!Cookies.get('userInfo'); 
 
     if (!isAuthenticated) {
-        return <Navigate to="/login" state={{ from: location }} replace />;
+        return <Navigate to="/auth/login" state={{ from: location }} replace />;
     }
 
     return children;

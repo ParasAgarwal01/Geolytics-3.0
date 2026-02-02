@@ -46,9 +46,11 @@ const Login = () => {
 useEffect(() => {
     const storedData = Cookies.get('userInfo');
     if (storedData) {
-        navigate('/map'); 
+        // Point to the new prefixed path
+        navigate('/geo/map'); 
     }
-}, [navigate]); 
+}, [navigate]);
+
 
 
 
@@ -85,7 +87,7 @@ useEffect(() => {
                 console.log('Response:', response.data);
                 console.log('Cookie:', Cookies.get('userInfo'));
                 // window.location.href = "http://localhost:5173/map";
-                navigate('/map');
+                navigate('/geo/map');
                 // window.location.href = "http://localhost:5174/geo/";
 
                 // navigate('http://localhost:5173/pm_tool/'); // Adjust this navigation based on role if needed

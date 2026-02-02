@@ -12,12 +12,7 @@
   },
   "dependencies": {
     "@mapbox/mapbox-gl-draw": "^1.5.1",
-<<<<<<< HEAD
-    "@turf/turf": "^7.2.0",
-    "axios": "^1.13.2",
-=======
     "@turf/turf": "^7.3.2",
->>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
     "dotenv": "^17.2.0",
     "js-cookie": "^3.0.5",
     "lucide-react": "^0.540.0",
