@@ -12,8 +12,12 @@
   },
   "dependencies": {
     "@mapbox/mapbox-gl-draw": "^1.5.1",
+<<<<<<< HEAD
     "@turf/turf": "^7.2.0",
     "axios": "^1.13.2",
+=======
+    "@turf/turf": "^7.3.2",
+>>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
     "dotenv": "^17.2.0",
     "js-cookie": "^3.0.5",
     "lucide-react": "^0.540.0",
@@ -27,11 +31,13 @@
     "react-router-dom": "^7.7.1"
   },
   "devDependencies": {
+    "@babel/core": "^7.28.6",
+    "@babel/parser": "^7.28.6",
     "@eslint/js": "^9.30.1",
     "@tailwindcss/postcss": "^4.1.11",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@vitejs/plugin-react": "^4.6.0",
+    "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.21",
     "eslint": "^9.30.1",
     "eslint-plugin-react-hooks": "^5.2.0",

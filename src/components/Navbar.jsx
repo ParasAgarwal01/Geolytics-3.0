@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
 import { logoutUser,UserProfile } from "./Logout";
+<<<<<<< HEAD
 import { checkCookieExpiration } from "./CookiesUtils";
 import { useNavigate } from 'react-router-dom';
+=======
+import { getEnabledFeatures } from "./CookiesUtils";
+>>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
 
 const Navbar = ({
   activeSubModule,
@@ -293,9 +297,14 @@ const Navbar = ({
             </button>
             {showProfileMenu && (
               <div className="dropdown-content drop-down" style={{ right: 0 }}>
+<<<<<<< HEAD
                 <button onClick={() => navigate('/user_profile')}>profile</button>
                 {/* <button onClick={logoutUser}>Logout</button> */}
                 <button onClick={() => navigate('/logout')}>Logout</button>
+=======
+                <button onClick={UserProfile}>profile</button>
+                <button onClick={logoutUser}>Logout</button>
+>>>>>>> 651384dfa488677c9c85e4042eba64151d50df11
               </div>
             )}
           </div>
