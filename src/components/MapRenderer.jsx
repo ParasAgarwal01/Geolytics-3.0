@@ -335,6 +335,10 @@ const [showPolygonPanel, setShowPolygonPanel] = useState(false);
   // ⭐ Detect ALARM / TRAFFIC and switch legend mode
   // ⭐ Alarm / Traffic label remapping (display only)
 
+    
+
+  
+
   
   const remapAlarmValue = (val) => {
     if (!val) return val;
