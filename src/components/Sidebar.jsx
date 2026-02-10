@@ -23,11 +23,9 @@ function getColorLabel(hex) {
 }
 
 function getApiBaseUrl() {
-  let base = import.meta.env.VITE_API_URL || "";
-  base = base.replace(/\/+$/, ""); // remove trailing slashes
-  if (!/\/geo-?api$/i.test(base)) base += "/geo-api"; // ensure /geo-api suffix
-  return base;
+  return (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
 }
+
 
 const LEGEND_TYPES = [
   { value: "kpi", label: "KPI Heatmap" },

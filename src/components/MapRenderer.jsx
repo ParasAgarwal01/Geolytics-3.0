@@ -1,10 +1,22 @@
-// MapRenderer.jsx — merged: new legend + old UI (search, toolbar, ruler, info panel)
+// MapRenderer.jsx — merged: new legend + old UI (search, toolbar, ruler, info panel) 
 
 import React, { useEffect, useRef, useState } from "react";
+import toast from 'react-hot-toast';
 import mapboxgl from "mapbox-gl";
 import * as turf from "@turf/turf";
 import "mapbox-gl/dist/mapbox-gl.css";
 import "../Styles.css";
+import MapboxDraw from "@mapbox/mapbox-gl-draw";
+import CircleMode from "mapbox-gl-draw-circle-mode";
+import FreehandMode from "mapbox-gl-draw-freehand-mode";
+import Papa from "papaparse";
+import { Pentagon, Pencil, Trash2, Save } from "lucide-react";
+import "@mapbox/mapbox-gl-draw/dist/mapbox-gl-draw.css";
+// import { getEnabledFeatures } from "../Utils/cookieUtils";
+import {getToken, checkCookieExpiration,isUserLoggedIn } from "./CookiesUtils";
+import { redirectToLogin } from "./Logout";
+import KPIGridUploader from "./KPIGridUploader";
+
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN || "";
 
@@ -216,6 +228,50 @@ const createSectorPolygonFeature = (
   return turf.feature(turf.polygon([[...outer, ...inner, outer[0]]]).geometry);
 };
 
+
+  const generateColors = (values) => {
+    const colors = {};
+    const step = 360 / values.length;
+    values.forEach((val, i) => {
+      colors[val] = `hsl(${Math.round(i * step)},70%,50%)`;
+    });
+    return colors;
+  };
+  
+  // const buildMatchExpression = (geojson) => {
+  //   const zones = [...new Set(geojson.features.map(f => f.properties.B4_Polygon))];
+  //   const colors = generateColors(zones);
+  //   const expression = ['match', ['get', 'B4_Polygon']];
+  //   zones.forEach(zone => {
+  //     expression.push(zone, colors[zone]);
+  //   });
+  //   expression.push('#cccccc');
+  //   return expression;
+  // };
+
+  
+  const buildMatchExpression = (geojson) => {
+  const expression = ['match', ['get', 'zone_id']];
+
+  geojson.features.forEach((feature) => {
+    const zoneId = String(feature.properties.zone_id);
+
+    expression.push(zoneId, '#00ff99'); // hardcoded color for now
+  });
+
+  expression.push('#cccccc'); // fallback color
+  console.log('🎨 fill-color expression:', expression);
+
+  return expression;
+};
+
+
+
+
+
+
+
+
 /* ---------------- Component ---------------- */
 
 const MapRenderer = ({
@@ -224,8 +280,8 @@ const MapRenderer = ({
 
   geojsonData,
   driveTestGeoJSON,
-  gridMapGeoJSON,
-
+  
+  setSelectedGridKPI,
   highlightedFeature,
 
   colorColumn, // selectedLayerColumn in App
@@ -246,6 +302,8 @@ const MapRenderer = ({
   gridData,
   targetConfigs,
   targetColorRanges,
+  setGridData,
+  
 
   selectedDB,
   selectedProject,
@@ -269,9 +327,69 @@ const MapRenderer = ({
   const [datePanelCollapsed, setDatePanelCollapsed] = useState(false);
   const lastClickedOriginalFeatureRef = useRef(null);
 
+const [showPolygonList, setShowPolygonList] = useState(false);  // upload expansion
+
+// 🎨 Polygon UI toggle
+const [showPolygonPanel, setShowPolygonPanel] = useState(false);
 
 
   const [showLegend, setShowLegend] = useState(true);
+  const [gridKPIColumns, setGridKPIColumns] = useState([]);
+  const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null)
+  // ===== DRIVE / GRID MODAL STATES =====
+const [showDrivePanel, setShowDrivePanel] = useState(false);
+const [showGridPanel, setShowGridPanel] = useState(false);
+
+// --- Local Drive / Grid UI state (mirrors Sidebar functionality) ---
+const [driveTestFile, setDriveTestFile] = useState(null);
+const [driveTestColumns, setDriveTestColumns] = useState([]);
+const [fetchingKPI, setFetchingKPI] = useState(false);
+const [kpiProgress, setKpiProgress] = useState(0);
+const [addingDriveColor, setAddingDriveColor] = useState(false);
+const [newDriveColorHex, setNewDriveColorHex] = useState("#0000ff");
+const [newDriveMin, setNewDriveMin] = useState(0);
+const [newDriveMax, setNewDriveMax] = useState(0);
+
+const [fetchingGridKPI, setFetchingGridKPI] = useState(false);
+const [gridKpiProgress, setGridKpiProgress] = useState(0);
+const [addingGridColor, setAddingGridColor] = useState(false);
+const [newGridColorHex, setNewGridColorHex] = useState("#0000ff");
+const [newGridMin, setNewGridMin] = useState(0);
+const [newGridMax, setNewGridMax] = useState(0);
+
+// Local copy of color ranges so UI edits are reactive here
+const [localColorRanges, setLocalColorRanges] = useState(colorRanges || {});
+
+// Sync prop -> local copy
+useEffect(() => {
+  console.log("📣 MapRenderer: colorRanges prop changed:", colorRanges, "colorColumn:", colorColumn);
+  setLocalColorRanges(colorRanges || {});
+  // Give a tick for React state to settle then refresh the layers
+  setTimeout(() => {
+    console.log("📣 MapRenderer: calling refreshLayerMap after colorRanges sync");
+    setTimeout(() => window.refreshLayerMap?.(), 0);
+  }, 0);
+}, [JSON.stringify(colorRanges), colorColumn]);
+
+// Dropdown UI state (local to MapRenderer)
+const [showDropdowns, setShowDropdowns] = useState({});
+const [searchTexts, setSearchTexts] = useState({});
+const dropdownRefs = useRef({});
+
+// Close dropdowns on outside click (mirror Sidebar behavior)
+useEffect(() => {
+  const handler = (e) => {
+    Object.entries(dropdownRefs.current || {}).forEach(([key, el]) => {
+      if (showDropdowns[key] && el && !el.contains(e.target)) {
+        setShowDropdowns((prev) => ({ ...prev, [key]: false }));
+      }
+    });
+  };
+
+  document.addEventListener("click", handler);
+  return () => document.removeEventListener("click", handler);
+}, [showDropdowns]);
+
   const [legendMode, setLegendMode] = useState("sector"); // sector | driveTest | grid | generation | rca | cmchange | band
   // ⭐ Detect ALARM / TRAFFIC and switch legend mode
   // ⭐ Alarm / Traffic label remapping (display only)
@@ -302,6 +420,24 @@ const MapRenderer = ({
     return s;
   };
 
+
+  
+  const applyFillColors = () => {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      const fillLayer = map.getStyle().layers.find(l => l.id.includes('fill'));
+      if (!fillLayer) return;
+
+      map.setPaintProperty(fillLayer.id, 'fill-color', ['get', 'fillColor']);
+      map.setPaintProperty(fillLayer.id, 'fill-opacity', 0.4); 
+    };
+
+
+  useEffect(() => {
+    checkCookieExpiration();
+  }, []);
+
   // ⭐ Force legend dropdown to switch when table changes
   useEffect(() => {
     const type = (tableType || "").toLowerCase();
@@ -318,6 +454,26 @@ const MapRenderer = ({
       setLegendMode("sector"); // default for KPI / others
     }
   }, [tableType]);
+useEffect(() => {
+  if (!showPolygonPanel) {
+    setShowPolygonList(false);
+  }
+}, [showPolygonPanel]);
+
+// Close map info popup and reset selection when project/DB/tech changes
+useEffect(() => {
+  if (popupRef.current) {
+    try {
+      popupRef.current.remove();
+    } catch (e) {
+      console.warn('Error removing popup on project/tech change', e);
+    }
+    popupRef.current = null;
+  }
+  setShowInfoPanel(false);
+  setSelectedSiteIdState("");
+  lastClickedOriginalFeatureRef.current = null;
+}, [selectedProject, selectedDB, tableType]);
 
   useEffect(() => {
     const typeLower = (tableType || "").toLowerCase();
@@ -377,8 +533,7 @@ const MapRenderer = ({
   const [cmLegend, setCmLegend] = useState([]); // [{from,to,color}]
   const [uniqueBands, setUniqueBands] = useState([]);
   const [bandColorMap, setBandColorMap] = useState({});
-  const [generationColorMap, setGenerationColorMap] =
-    useState(GENERATION_COLORS);
+  const [generationColorMap, setGenerationColorMap] = useState(GENERATION_COLORS);
 
   // KPI color overrides
   const [sectorKpiColors, setSectorKpiColors] = useState({}); // key: `${kpi}__${baseColor}`
@@ -391,12 +546,231 @@ const MapRenderer = ({
     high: "#064e3b",
   });
 
+  // Safe refresh helpers to immediately update map layers based on localColorRanges
+  useEffect(() => {
+    // Drive test layer refresh
+    window.refreshDriveTestLayer = (kpiArg) => {
+      const map = mapInstance.current;
+      if (!map) return;
+      const kpi = kpiArg || selectedDriveKPI;
+      let colorExpr = "#666";
+      const ranges = (localColorRanges && localColorRanges[kpi]) || {};
+      if (kpi && ranges && Object.keys(ranges).length) {
+        colorExpr = ["case"];
+        for (const [baseColor, [min, max]] of Object.entries(ranges)) {
+          colorExpr.push(
+            [
+              "all",
+              [">=", ["to-number", ["get", kpi]], Number(min)],
+              ["<=", ["to-number", ["get", kpi]], Number(max)],
+            ],
+            baseColor
+          );
+        }
+        colorExpr.push("#cccccc");
+      }
+      try {
+        if (map.getLayer("driveTest-points")) {
+          map.setPaintProperty("driveTest-points", "circle-color", colorExpr);
+        }
+      } catch (e) {
+        console.warn("refreshDriveTestLayer failed", e);
+      }
+    };
+
+    // Grid layer refresh
+    window.refreshGridLayer = () => {
+      const map = mapInstance.current;
+      if (!map) return;
+      const kpi = selectedGridKPI;
+      const ranges = (localColorRanges && localColorRanges[kpi]) || {};
+
+      // circle-color (discrete) or gradient fallback
+      if (kpi && ranges && Object.keys(ranges).length) {
+        const colorExpr = ["case"];
+        for (const [baseColor, [min, max]] of Object.entries(ranges)) {
+          colorExpr.push(
+            [
+              "all",
+              [">=", ["to-number", ["get", "__value"]], Number(min)],
+              ["<=", ["to-number", ["get", "__value"]], Number(max)],
+            ],
+            baseColor
+          );
+        }
+        colorExpr.push(gridGradientColors.mid || "#22c55e");
+        try {
+          if (map.getLayer("gridMap-points")) {
+            map.setPaintProperty("gridMap-points", "circle-color", colorExpr);
+          }
+          if (map.getLayer("gridMap-heatmap")) {
+            map.setPaintProperty("gridMap-heatmap", "heatmap-weight", [
+              "interpolate",
+              ["linear"],
+              ["to-number", ["get", "__value"]],
+              0,
+              0,
+              1,
+              1,
+            ]);
+          }
+        } catch (e) {
+          console.warn("refreshGridLayer failed", e);
+        }
+      } else {
+        // fallback: compute gradient on min/max from source
+        try {
+          if (!map.getSource("grid-map")) return;
+          const data = map.getSource("grid-map")._data || gridRef.current;
+          const values = (data?.features || [])
+            .map((f) => f.properties?.__value)
+            .filter((v) => Number.isFinite(v));
+          if (!values.length) return;
+          const minVal = Math.min(...values);
+          const maxVal = Math.max(...values);
+          const colorExpr = [
+            "interpolate",
+            ["linear"],
+            ["to-number", ["get", "__value"]],
+            minVal,
+            gridGradientColors.low,
+            (minVal + maxVal) / 2,
+            gridGradientColors.mid,
+            maxVal,
+            gridGradientColors.high,
+          ];
+          if (map.getLayer("gridMap-points")) map.setPaintProperty("gridMap-points", "circle-color", colorExpr);
+          if (map.getLayer("gridMap-heatmap")) map.setPaintProperty("gridMap-heatmap", "heatmap-weight", ["interpolate", ["linear"], ["to-number", ["get", "__value"]], minVal, 0, maxVal, 1]);
+        } catch (e) {
+          console.warn("refreshGridLayer fallback failed", e);
+        }
+      }
+    };
+
+    // Universal refresh helper — recompute per-feature fillColor for polygon/point sources
+    window.refreshLayerMap = (updatedGeojson = null) => {
+      const map = mapInstance.current;
+      if (!map) {
+        console.log("refreshLayerMap: no map instance");
+        return;
+      }
+
+      console.log("refreshLayerMap: called", {
+        updatedGeojsonExists: !!updatedGeojson,
+        colorColumn,
+        localColorRangesKeys: Object.keys(localColorRanges || {}),
+      });
+
+      const computeForGeo = (geo, column) => {
+        if (!geo || !Array.isArray(geo.features)) {
+          console.log("computeForGeo: no features or invalid geo for column", column);
+          return geo;
+        }
+
+        const ranges = (localColorRanges && localColorRanges[column]) || {};
+        const entries = Object.entries(ranges || {});
+        let assignedCount = 0;
+
+        const features = geo.features.map((f, idx) => {
+          try {
+            const props = { ...(f.properties || {}) };
+            const raw = props[column];
+
+            let assignedColor = null;
+
+            // Numeric bands (entries where value is an array [min,max])
+            const numericEntries = entries.filter(([, v]) => Array.isArray(v));
+            if (numericEntries.length) {
+              const val = raw == null || raw === "" ? NaN : Number(String(raw).replace(/,/g, "").trim());
+              if (!Number.isNaN(val)) {
+                for (const [k, v] of numericEntries) {
+                  const [min, max] = v || [];
+                  if (Number(val) >= Number(min) && Number(val) <= Number(max)) {
+                    // For numeric bands, key 'k' may be a color (hex) or a name (green)
+                    assignedColor = k;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // Categorical bands (entries where value is a color string)
+            if (!assignedColor) {
+              const categoricalEntries = entries.filter(([, v]) => typeof v === "string");
+              if (categoricalEntries.length) {
+                const rawStr = raw == null ? "" : String(raw).trim();
+                for (const [k, v] of categoricalEntries) {
+                  // match property value to category key; assigned color is the value (hex)
+                  if (String(k).trim() === rawStr) {
+                    assignedColor = v;
+                    break;
+                  }
+                }
+              }
+            }
+
+            if (assignedColor) assignedCount++;
+            props.fillColor = assignedColor || props.fillColor || "#cccccc";
+            return { ...f, properties: props };
+          } catch (e) {
+            console.warn("computeForGeo: feature compute error", e);
+            return f;
+          }
+        });
+
+        console.log(`computeForGeo: column=${column} total=${geo.features.length} assigned=${assignedCount} entries=${entries.length}`);
+        return { ...geo, features };
+      };
+
+      try {
+        // If a specific geojson was provided (Sidebar sometimes passes updatedGeoJson)
+        if (updatedGeojson) {
+          const first = updatedGeojson.features?.[0];
+          const col = colorColumn;
+          if (first && first.geometry && first.geometry.type && first.geometry.type.includes("Polygon")) {
+            sectorsRef.current = computeForGeo(updatedGeojson, col);
+            if (map.getSource("sectors")) map.getSource("sectors").setData(sectorsRef.current);
+          } else {
+            // try both point sources
+            driveTestRef.current = computeForGeo(updatedGeojson, col);
+            gridRef.current = computeForGeo(updatedGeojson, col);
+            if (map.getSource("drive-test")) map.getSource("drive-test").setData(driveTestRef.current);
+            if (map.getSource("grid-map")) map.getSource("grid-map").setData(gridRef.current);
+          }
+        } else {
+          // Apply current localColorRanges -> all sources
+          const col = colorColumn;
+          sectorsRef.current = computeForGeo(sectorsRef.current, col);
+          driveTestRef.current = computeForGeo(driveTestRef.current, col);
+          gridRef.current = computeForGeo(gridRef.current, col);
+
+          if (map.getSource("sectors")) map.getSource("sectors").setData(sectorsRef.current);
+          if (map.getSource("drive-test")) map.getSource("drive-test").setData(driveTestRef.current);
+          if (map.getSource("grid-map")) map.getSource("grid-map").setData(gridRef.current);
+        }
+
+        // Ensure layer paint expressions use the updated properties
+        applyFillColors();
+
+        const sectorsCount = sectorsRef.current?.features?.length || 0;
+        const driveCount = driveTestRef.current?.features?.length || 0;
+        const gridCount = gridRef.current?.features?.length || 0;
+        console.log("refreshLayerMap: updated counts", { sectorsCount, driveCount, gridCount });
+      } catch (e) {
+        console.warn("refreshLayerMap failed", e);
+      }
+    };
+  }, [JSON.stringify(localColorRanges), selectedDriveKPI, selectedGridKPI, JSON.stringify(gridGradientColors)]);
+
   // 🔍 Search panel state
   const [showSearchPanel, setShowSearchPanel] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchHistory, setSearchHistory] = useState([]); // stack of previous highlights
   const [searchResults, setSearchResults] = useState([]);
   const [internalHighlight, setInternalHighlight] = useState(null);
+  const [targetTables, setTargetTables] = useState([]);
+  const [kpiSource, setKpiSource] = useState({ type: null, table: null });
+
 
   // 🧭 Ruler state
   const rulerActiveRef = useRef(false);
@@ -413,6 +787,1090 @@ const MapRenderer = ({
   const [selectedSiteIdState, setSelectedSiteIdState] = useState("");
   const [infoSource, setInfoSource] = useState({});
   const [infoTarget, setInfoTarget] = useState({});
+
+  //  POLYGON DRAWING & SITE DETECTION SECTION
+
+  const drawRef = useRef(null);                           // MapboxDraw instance
+  const popupRef = useRef(null);                          // Mapbox Popup instance
+  const currentMatchedSitesRef = useRef([]);              // Sites matched in polygon
+  const currentActiveZoneIdRef = useRef(null);            // Current zone ID
+  const isDrawingRef = useRef(false);                     // Is user currently drawing
+  
+// Pending draw mode
+  const [polygonCount, setPolygonCount] = useState(0);    // Counter for zone IDs
+  const [listpolygon,setListpolygon] = useState([])
+  const [userselectedPolygon, setUserSelectedPolygon] = useState(null);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+
+  const [uploadedZipId, setUploadedZipId] = useState(null);
+  const [polygonFiles, setPolygonFiles] = useState([]);
+  const [showShpPopup, setShowShpPopup] = useState(false);
+  const [selectedShpFile, setSelectedShpFile] = useState(null);
+  const [projectZones, setProjectZones] = useState([]);
+   const [selectedPolygon, setSelectedPolygon] = useState(null);
+
+
+
+  const fileInputRef = useRef(null);
+
+  
+
+  const username = checkCookieExpiration().userData?.first_name || "User";
+  // console.log(checkCookieExpiration(),'cookies')
+  const userRole = checkCookieExpiration().userData?.role || 'User';
+
+  // Initialize drawing tools effect
+  useEffect(() => {
+    if (!mapInstance.current) {
+      console.log("⏳ Waiting for mapInstance...");
+      return;
+    }
+
+    const map = mapInstance.current;
+    console.log("🗺️ Map instance available, checking if Draw is needed...");
+
+    // Check if Draw is already initialized
+    if (drawRef.current) {
+      console.log("✅ Draw already initialized");
+      return;
+    }
+
+    // Wait for map to be fully loaded
+    const initDraw = () => {
+      if (drawRef.current) {
+        console.log("✅ Draw already exists, skipping init");
+        return;
+      }
+      initializeDrawingTools(map);
+    };
+
+    if (map.isStyleLoaded()) {
+      console.log("🎯 Map style already loaded, initializing Draw...");
+      initDraw();
+    } else {
+      console.log("⏳ Waiting for map style to load...");
+      map.once("load", initDraw);
+      map.once("style.load", initDraw);
+    }
+
+    return () => {
+      // Cleanup on unmount
+      if (drawRef.current && map.getSource("draw-source")) {
+        // Draw instance already handles its cleanup
+      }
+    };
+  }, [mapInstance]);
+
+
+useEffect(() => {
+  console.log("Auth check useEffect running");
+  const value = isUserLoggedIn();
+  console.log("isUserLoggedIn:", value);
+  setIsLoggedIn(value);
+}, []);
+
+
+  const token = checkCookieExpiration().userData.token
+    if (!token) {
+      toast.error("Session expired. Please login again.");
+      return;
+    }
+
+
+const getRandomColor = () => {
+  const letters = "0123456789ABCDEF";
+  let color = "#";
+  for (let i = 0; i < 6; i++) {
+    color += letters[Math.floor(Math.random() * 16)];
+  }
+  return color;
+};
+
+
+  function getApiBaseUrl() {
+  return (import.meta.env.VITE_API_URL || "").replace(/\/+$/, "");
+}
+
+
+  const handlePolygonZipUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const res = await fetch(`${getApiBaseUrl()}/geo-api/polygon/upload-zip`, {
+      method: "POST",
+      body: formData,
+    });
+    
+    const data = await res.json();
+    console.log(data,'data')
+    setUploadedZipId(data.zip_id);
+    setPolygonFiles(data.files);
+
+    setSelectedShpFile(null);
+    setShowShpPopup(true);
+
+    e.target.value = ""
+
+  };
+
+
+  const onChooseClick = () => {
+  if (!uploadedZipId) {
+    toast.error("Please upload zip first");
+    return;
+  }
+  setShowShpPopup(true);
+};
+
+
+  const fetchProjectZones = async (fileName) => {
+  setSelectedShpFile(fileName);
+
+  const res = await fetch(
+    `${getApiBaseUrl()}/geo-api/polygon/geojson?zip_id=${uploadedZipId}&file=${encodeURIComponent(
+      fileName
+    )}`
+  );
+
+  const data = await res.json();
+  console.log(data,'df')
+
+    const zones = data.features.map((f) => ({
+      id: f.properties.id,           // Use properties.id as unique id
+      zone_id: f.properties.id,      // Or use f.id if you want
+      zone_name: f.properties.B4_Polygon,
+      geometry: f.geometry
+    }));
+
+    setProjectZones(zones);
+    setShowShpPopup(false);
+    setShowPolygonList(true);
+
+ 
+  setShowShpPopup(false);
+};
+
+console.log('pj',projectZones.map(lp => ({
+  id: lp.id,
+  zone_id: lp.zone_id,      // Is this undefined?
+  properties: lp.properties // Is the data hidden inside here?
+})));
+
+
+  const onButtonClick = () => {
+    fileInputRef.current.click();
+  };
+
+
+
+useEffect(() => {
+  const map = mapInstance.current;
+  if (!map) return;
+  if (!map.getLayer("sector-layer")) return;
+
+  try {
+    console.log("📣 sector repaint triggered", { colorColumn, legendMode, tableType, colorRangesKeys: Object.keys(colorRanges || {}) });
+    map.setPaintProperty("sector-layer", "fill-color", [
+      "coalesce",
+      ["get", "fillColor"],
+      ["get", "color"],
+      "#9ca3af",
+    ]);
+    // Recompute per-feature fillColor and push changes to source
+    console.log("📣 sector repaint: calling refreshLayerMap");
+    setTimeout(() => window.refreshLayerMap?.(), 0);
+  } catch (e) {
+    console.warn("sector repaint failed", e);
+  }
+}, [
+  JSON.stringify(colorRanges),
+  JSON.stringify(sectorKpiColors),
+  tableType,
+  legendMode,
+  colorColumn
+]);
+
+
+
+
+useEffect(() => {
+  async function initPolygonCounter() {
+    const res = await fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/user_polygon_list`,
+
+      {
+        headers: {
+          Authorization: `Token ${token}`,
+        },
+      }
+    );
+
+    if (!res.ok) {
+      console.error("Failed to fetch polygons");
+      return;
+    }
+
+  const data = await res.json();   
+    setListpolygon(data.results)
+    const polygons = data.results || [];
+
+   
+
+    let maxIndex = -1;
+
+    polygons.forEach((p) => {
+      const parts = p.zone_id.split("_");
+      const num = parseInt(parts[1], 10);
+      if (!isNaN(num) && num > maxIndex) {
+        maxIndex = num;
+      }
+    });
+
+    setPolygonCount(maxIndex + 1);
+  }
+
+  if (isLoggedIn) {
+    initPolygonCounter();
+  }
+}, [isLoggedIn, token]);
+
+
+const initializeDrawingTools = (map) => {
+  if (drawRef.current) {
+    console.log("Draw already initialized, skipping");
+    return;
+  }
+
+  console.log("Starting Draw initialization...");
+
+  try {
+    // Initialize Mapbox Draw with custom styles
+    const draw = new MapboxDraw({
+      displayControlsDefault: false,
+      controls: {
+        polygon: false,
+        trash: false,
+      },
+      modes: {
+        ...MapboxDraw.modes,
+        draw_circle: CircleMode,
+        draw_freehand: FreehandMode,
+      },
+      styles: [
+        // Inactive polygon fill
+        {
+          id: "gl-draw-polygon-fill-inactive",
+          type: "fill",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+            "fill-opacity": 0.4,
+          },
+        },
+        // Active polygon fill
+        {
+          id: "gl-draw-polygon-fill-active",
+          type: "fill",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "fill-color": ["coalesce", ["get", "fillColor"], "#2563eb"],
+            "fill-opacity": 0.6,
+          },
+        },
+        // Polygon outline
+        {
+          id: "gl-draw-polygon-stroke",
+          type: "line",
+          filter: ["all", ["==", "$type", "Polygon"], ["!=", "mode", "static"]],
+          paint: {
+            "line-color": "#000000",
+            "line-width": 2,
+          },
+        },
+        // Draw-time vertices halo
+        {
+          id: "gl-draw-polygon-and-line-vertex-halo-active",
+          type: "circle",
+          filter: ["all", ["==", "$type", "Point"], ["!=", "meta", "midpoint"]],
+          paint: {
+            "circle-radius": 6,
+            "circle-color": ["coalesce", ["get", "fillColor"], "#3b92f6"],
+            "circle-opacity": 0.8,
+          },
+        },
+        // Draw-time vertices actual points
+        {
+          id: "gl-draw-polygon-and-line-vertex-active",
+          type: "circle",
+          filter: ["all", ["==", "$type", "Point"], ["!=", "meta", "midpoint"]],
+          paint: {
+            "circle-radius": 4,
+            "circle-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+            "circle-opacity": 1,
+          },
+        },
+      ],
+    });
+
+    // Add Draw to the map
+    map.addControl(draw);
+    drawRef.current = draw;
+    console.log(" Draw control added and drawRef set");
+
+    // Event listener: polygon creation
+    map.on("draw.create", (e) => {
+      const feature = e.features[0];
+      if (!feature) return;
+
+      // Assign random fill color
+      const color = getRandomColor();
+      draw.setFeatureProperty(feature.id, "fillColor", color);
+
+      // Assign zone ID
+      setPolygonCount((prev) => {
+        const zoneId = `west_${prev}_${username}`;
+        draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+        currentActiveZoneIdRef.current = zoneId;
+        return prev + 1;
+      });
+    });
+
+ 
+    setupDrawingListeners(map, draw);
+
+    // Load existing polygons with unique colors
+    loadExistingPolygons();
+
+    console.log("✅ Draw initialization complete");
+
+  } catch (error) {
+    console.error("Error initializing Draw:", error);
+    drawRef.current = null;
+  }
+};
+
+
+  
+
+
+ 
+
+  const setupDrawingListeners = (map, draw) => {
+    console.log("🎯 Setting up drawing listeners...");
+
+    // Mode change listener
+    map.on("draw.modechange", (e) => {
+      const mode = draw.getMode();
+      console.log("📍 Drawing mode changed to:", mode);
+      isDrawingRef.current = mode && (mode.includes("draw_polygon") || mode.includes("draw_freehand") || mode.includes("draw_circle"));
+      
+      // Set cursor when mode changes
+      if (isDrawingRef.current) {
+        const canvas = map.getCanvas();
+        if (canvas) {
+          canvas.style.cursor = "crosshair";
+          console.log("✅ Cursor set to crosshair on mode change");
+        }
+      }
+    });
+
+
+
+
+
+    
+
+
+
+    // Draw create listener - set zone ID on new polygon
+    map.on("draw.create", (e) => {
+      const feature = e.features[0];
+      if (!feature) return;
+
+      const color = getRandomColor();
+      draw.setFeatureProperty(feature.id, "fillColor", color);
+
+    
+      setPolygonCount((prev) => {
+        const zoneId = `west_${prev}_${username}`;
+        draw.setFeatureProperty(feature.id, "zone_id", zoneId);
+        currentActiveZoneIdRef.current = zoneId;
+        return prev + 1;
+      });
+
+      
+    });
+
+
+      map.on("load", () => {
+  // inactive polygons
+  map.addLayer({
+    id: "draw-fill-inactive",
+    type: "fill",
+    source: "mapbox-gl-draw-cold",
+    filter: ["==", ["get", "$type"], "Polygon"],
+    paint: {
+      "fill-color": ["coalesce", ["get", "fillColor"], "#3b82f6"],
+      "fill-opacity": 0.4
+    }
+  });
+
+  // active polygon
+  map.addLayer({
+    id: "draw-fill-active",
+    type: "fill",
+    source: "mapbox-gl-draw-hot",
+    filter: ["==", ["get", "$type"], "Polygon"],
+    paint: {
+      "fill-color": ["coalesce", ["get", "fillColor"], "#2563eb"],
+      "fill-opacity": 0.6
+    }
+  });
+});
+
+
+
+      
+
+
+
+    map.on("draw.update", handleDrawingComplete);
+
+    // Global click handler for CSV and Submit buttons
+    const handleGlobalClick = (e) => {
+      if (e.target.id === "export-csv-btn") {
+        handleExportCSV();
+      }
+      if (e.target.id === "submit-db-btn") {
+        handleSubmitToBackend();
+      }
+    };
+
+    // Map click listener for site detection and polygon clicks
+    map.on("click", handleMapClick);
+
+    // Setup cursor handling for polygon hover
+    setupCursorHandling(map, draw);
+
+    // Right-click or Escape to finish drawing
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape" && isDrawingRef.current) {
+        console.log("✋ Escape pressed, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    // Right-click context menu - finish drawing
+    const handleContextMenu = (e) => {
+      if (isDrawingRef.current) {
+        e.preventDefault();
+        console.log("✋ Right-click, finishing drawing...");
+        draw.changeMode("simple_select");
+      }
+    };
+
+    document.addEventListener("click", handleGlobalClick);
+    document.addEventListener("keydown", handleKeyDown);
+    map.getCanvas().addEventListener("contextmenu", handleContextMenu);
+
+    // Cleanup function
+    return () => {
+      document.removeEventListener("click", handleGlobalClick);
+      document.removeEventListener("keydown", handleKeyDown);
+      map.getCanvas().removeEventListener("contextmenu", handleContextMenu);
+    };
+  };
+
+
+  const activateTool = (mode) => {
+    
+
+    // Country already selected, activate directly
+    if (!drawRef.current) {
+      setTimeout(() => {
+        if (drawRef.current) {
+    
+          activateTool(mode);
+        } else {
+          if (mapInstance.current) {
+            console.log("🔧 Force initializing Draw...");
+            initializeDrawingTools(mapInstance.current);
+            setTimeout(() => {
+              activateTool(mode);
+            }, 300);
+          }
+        }
+      }, 500);
+      return;
+    }
+
+    try {
+      drawRef.current.changeMode(mode);
+      
+      // Set cursor immediately and after mode change settles
+      const setCursor = () => {
+        if (mapInstance.current) {
+          const canvas = mapInstance.current.getCanvas();
+          if (canvas) {
+            canvas.style.cursor = "crosshair";
+  
+          }
+        }
+      };
+      
+      setCursor();
+      
+      setTimeout(() => {
+        setCursor();
+      }, 100);
+    } catch (error) {
+      console.error(" Error activating tool:", error);
+    }
+  };
+
+  const handleDrawingComplete = () => {
+    console.log("✏️ Drawing completed");
+    if (!drawRef.current) return;
+
+    const data = drawRef.current.getAll();
+    if (data.features.length === 0) return;
+
+    const lastFeature = data.features[data.features.length - 1];
+    console.log("📦 Last drawn feature:", lastFeature);
+
+    // Detect clicked sites within polygon
+    detectClickedSites(lastFeature);
+  };
+
+  // *** FUNCTION 7: DETECT CLICKED SITES ***
+  const detectClickedSites = (polygon) => {
+    // Get site data from geojsonData
+    const sites = geojsonData?.features || [];
+    
+    if (!sites || sites.length === 0) {
+      console.warn("⚠️ No site data available");
+      currentMatchedSitesRef.current = [];
+      showZonePopup(polygon, []);
+      return;
+    }
+
+    const matchedSites = [];
+    sites.forEach((feature) => {
+      try {
+        if (feature && feature.geometry) {
+          let coordinates = null;
+          
+          // Handle Point geometry
+          if (feature.geometry.type === "Point" && feature.geometry.coordinates) {
+            coordinates = feature.geometry.coordinates;
+          }
+          // Handle properties with Lat/Long
+          else if (feature.properties) {
+            const lat = feature.properties.Lat || feature.properties.LATITUDE || feature.properties.latitude;
+            const lon = feature.properties.Long || feature.properties.LONGITUDE || feature.properties.longitude;
+            if (lat != null && lon != null) {
+              coordinates = [lon, lat];
+            }
+          }
+
+          if (coordinates) {
+            const point = turf.point(coordinates);
+            if (turf.booleanPointInPolygon(point, polygon)) {
+              matchedSites.push(feature);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn("Error checking point in polygon:", err);
+      }
+    });
+
+    currentMatchedSitesRef.current = matchedSites;
+    console.log(`🎯 Found ${matchedSites.length} sites in polygon`);
+
+    // Show popup with zone info
+    showZonePopup(polygon, matchedSites);
+  };
+
+  // *** FUNCTION 8: SHOW ZONE POPUP ***
+  const showZonePopup = (polygon, sites) => {
+    const draw = drawRef.current;
+    if (!draw) return;
+
+    // Find or create zone ID
+    let zoneId = currentActiveZoneIdRef.current;
+    if (!zoneId) {
+      const countryPrefix = "UK"; // Default country
+      zoneId = `${countryPrefix}_${polygonCount}_${username}`;
+      currentActiveZoneIdRef.current = zoneId;
+    }
+
+    // Build site list HTML - handle various property names
+    const siteList =
+      sites.length === 0
+        ? "<i style=\"color: #999;\">No sites found</i>"
+        : sites
+            .slice(0, 15)
+            .map((s) => {
+              const props = s.properties || {};
+              const siteName = props.SITENAME || props.sitename || props["SITE NAME"] || props.site_name || props["SITE ID"] || props.site_id || "Unknown Site";
+              return `<div style="padding: 4px 6px; border-bottom: 1px solid #eee; font-size: 11px;">
+                  ${siteName}
+                </div>`;
+            })
+            .join("");
+
+    // Create popup content
+    const popupContent = document.createElement("div");
+    popupContent.innerHTML = `
+      <div style="padding: 12px; font-size: 12px; color: #333; min-width: 240px; max-width: 280px;">
+        <div style="margin-bottom: 8px;">
+          <strong style="font-size: 13px;">Zone ID:</strong><br/>
+          <span style="font-size: 11px; color: #666;">${zoneId}</span>
+        </div>
+        
+        <div style="margin-bottom: 8px; display: flex; gap: 6px;">
+          <button id="export-csv-btn" style="flex: 1; padding: 6px; background: #3b82f6; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            📊 Export CSV
+          </button>
+          <button id="submit-db-btn" style="flex: 1; padding: 6px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 500;">
+            💾 Save DB
+          </button>
+        </div>
+
+        <div style="margin-bottom: 6px;">
+          <strong>Total Sites:</strong> <span style="background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-weight: 600;">${sites.length}</span>
+        </div>
+
+        <div style="margin-bottom: 6px; background: #f9f9f9; border-radius: 4px; max-height: 140px; overflow-y: auto; border: 1px solid #e0e0e0;">
+          ${siteList}
+        </div>
+
+        <div style="font-size: 10px; color: #999; text-align: center; padding-top: 6px; border-top: 1px solid #e0e0e0;">
+          Right-click to close polygon
+        </div>
+      </div>
+    `;
+
+    // Remove old popup
+    if (popupRef.current) {
+      popupRef.current.remove();
+    }
+
+    // Create new popup at polygon center
+    const center = turf.centroid(polygon);
+    popupRef.current = new mapboxgl.Popup({ closeOnClick: true })
+      .setLngLat(center.geometry.coordinates)
+      .setDOMContent(popupContent)
+      .addTo(mapInstance.current);
+
+    // Attach event listeners to buttons
+    setTimeout(() => {
+      const csvBtn = document.getElementById("export-csv-btn");
+      const submitBtn = document.getElementById("submit-db-btn");
+
+      if (csvBtn) {
+        csvBtn.addEventListener("click", handleExportCSV);
+      }
+
+      if (submitBtn) {
+        submitBtn.addEventListener("click", handleSubmitToBackend);
+      }
+    }, 0);
+  };
+
+const handleMapClick = (e) => {
+  const map = mapInstance.current;
+  const draw = drawRef.current;
+  if (!map || !draw) return;
+
+
+  if (isDrawingRef.current) return;
+
+  const ids = draw.getFeatureIdsAt(e.point);
+  if (ids && ids.length > 0) {
+    const feature = draw.get(ids[0]);
+    if (feature?.geometry?.type === "Polygon") {
+      map.getCanvas().style.cursor = "pointer";
+      detectClickedSites(feature);
+      return;
+    }
+  }
+
+
+  const features = map.queryRenderedFeatures(e.point, {
+    layers: ["user-polygons-fill", "selected-polygon-fill"],
+  });
+
+  if (!features.length) {
+    map.getCanvas().style.cursor = "default";
+    if (popupRef.current) popupRef.current.remove();
+    return;
+  }
+
+  const polygon = features[0];
+  map.getCanvas().style.cursor = "pointer";
+
+  detectClickedSites({
+    type: "Feature",
+    geometry: polygon.geometry,
+    properties: polygon.properties || {},
+  });
+};
+  // *** FUNCTION 6: SETUP CURSOR HANDLING ***
+  const setupCursorHandling = (map, draw) => {
+    map.on("mousemove", (e) => {
+      const ids = draw.getFeatureIdsAt(e.point);
+      if (ids && ids.length > 0) {
+        // Hovering over polygon
+        map.getCanvas().style.cursor = "pointer";
+      } else if (!isDrawingRef.current) {
+        // Not hovering over polygon and not drawing
+        map.getCanvas().style.cursor = "default";
+      }
+    });
+  };
+
+  // *** FUNCTION 9: HANDLE EXPORT CSV ***
+  
+  const handleExportCSV = () => {
+    if (currentMatchedSitesRef.current.length === 0) {
+      toast.error("No sites to export");
+      return;
+    }
+
+    try {
+      const csv = Papa.unparse(
+        currentMatchedSitesRef.current.map((s) => s.properties)
+      );
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(new Blob([csv]));
+      link.download = `${currentActiveZoneIdRef.current}.csv`;
+      link.click();
+      console.log("✅ CSV exported");
+    } catch (error) {
+      console.error("Error exporting CSV:", error);
+      toast.error("Error exporting CSV");
+    }
+  };
+
+  // *** FUNCTION 10: HANDLE SUBMIT TO BACKEND ***
+ 
+  const handleSubmitToBackend = async () => {
+    const token = checkCookieExpiration().userData.token
+    if (!token) {
+      toast.error("Session expired. Please login again.");
+      redirectToLogin();
+      return;
+    }
+
+    const draw = drawRef.current;
+    if (!draw) {
+      toast.error("Drawing tools not ready");
+      return;
+    }
+
+    const zoneId = currentActiveZoneIdRef.current;
+    const sites = currentMatchedSitesRef.current;
+
+  
+
+    if (!zoneId) {
+      toast.error("No zone ID set");
+    }
+
+    const allFeatures = draw.getAll().features;
+    const currentPolygon = allFeatures.find((f) => f.properties?.zone_id === zoneId);
+
+
+    if (!currentPolygon) {
+      toast.error("Could not find the polygon geometry to save.");
+      return;
+    }
+
+    const payload = {
+      zoneId,
+      country: "UK",
+      site_data: {
+        feature: currentPolygon,
+        matched_sites: sites.map((s) => s.properties),
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log(payload, "payload");
+
+
+  const savePromise = fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/save_polygon`,
+
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Token ${token}`,
+        },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    toast.promise(savePromise, {
+      loading: 'Saving polygon...',
+      success: (res) => {
+        if (!res.ok) throw new Error('Server error');
+        return 'Polygon saved successfully! ✅';
+      },
+      error: (err) => `Error: ${err.message || 'Network error'} ❌`,
+    });
+};
+
+
+const drawAndZoomSelectedPolygon = (polygon) => {
+  const map = mapInstance.current;
+  if (!map) return;
+
+  let feature = null;
+
+  // Case 1: Saved GeoJSON
+  if (polygon.site_data?.feature) {
+    feature = {
+      ...polygon.site_data.feature,
+      id: polygon.id,
+      properties: {
+        ...polygon.site_data.feature.properties,
+        zone_id: polygon.zone_id,
+        country: polygon.country,
+      },
+    };
+  }
+  // Case 2: Coordinate array
+  else if (Array.isArray(polygon.site_data)) {
+    const points = polygon.site_data.map((p) => [
+      p.LONGITUDE,
+      p.LATITUDE,
+    ]);
+
+    if (
+      points[0][0] !== points[points.length - 1][0] ||
+      points[0][1] !== points[points.length - 1][1]
+    ) {
+      points.push(points[0]);
+    }
+
+    feature = turf.polygon([points], {
+      zone_id: polygon.zone_id,
+      id: polygon.id,
+    });
+    feature.id = polygon.id;
+  }
+
+  if (!feature) return;
+
+  // 🔴 Remove old
+  if (map.getLayer("selected-polygon-fill")) {
+    map.removeLayer("selected-polygon-fill");
+    map.removeLayer("selected-polygon-outline");
+    map.removeSource("selected-polygon");
+  }
+
+  // 🟢 Add source
+  map.addSource("selected-polygon", {
+    type: "geojson",
+    data: feature,
+  });
+
+  map.addLayer({
+    id: "selected-polygon-fill",
+    type: "fill",
+    source: "selected-polygon",
+    paint: {
+      "fill-color": "#22c55e",
+      "fill-opacity": 0.5,
+    },
+  });
+
+  map.addLayer({
+    id: "selected-polygon-outline",
+    type: "line",
+    source: "selected-polygon",
+    paint: {
+      "line-color": "#72a316",
+      "line-width": 2,
+    },
+  });
+
+  // 🟢 Zoom
+  const coords =
+    feature.geometry.type === "MultiPolygon"
+      ? feature.geometry.coordinates.flat(2)
+      : feature.geometry.coordinates[0];
+
+  const bounds = coords.reduce(
+    (b, c) => b.extend(c),
+    new mapboxgl.LngLatBounds(coords[0], coords[0])
+  );
+
+  map.fitBounds(bounds, {
+    padding: 60,
+    duration: 1000,
+  });
+
+  // ✅ Auto open popup AFTER zoom
+  map.once("moveend", () => {
+    detectClickedSites(feature);
+  });
+};
+
+
+
+
+
+
+
+
+
+const handleApply = () => {
+  if (!userselectedPolygon) return;
+
+  isDrawingRef.current = false;
+
+  drawAndZoomSelectedPolygon(userselectedPolygon);
+  setShowPolygonList(false);
+};
+
+
+
+
+
+
+
+  // *** FUNCTION 11: LOAD EXISTING POLYGONS ***
+  const loadExistingPolygons = async () => {
+  const token = checkCookieExpiration().userData.token;
+  if (!token) {
+    alert("Session expired. Please login again.");
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `${import.meta.env.VITE_API_URL}/geo-api/polygon/user_polygon_list`,
+      {
+        headers: { Authorization: `Token ${token}` },
+      }
+    );
+
+    const data = await response.json();
+    console.log(data, "polygons data");
+
+    if (data.success && data.results) {
+      const map = mapInstance.current;
+      if (!map) return;
+
+      // 🔴 Remove previous polygon layers and source
+      if (map.getLayer("user-polygons-fill")) {
+        map.removeLayer("user-polygons-fill");
+      }
+      if (map.getLayer("user-polygons-outline")) {
+        map.removeLayer("user-polygons-outline");
+      }
+      if (map.getSource("user-polygons")) {
+        map.removeSource("user-polygons");
+      }
+
+      // Generate features with unique color for each
+      const features = data.results
+        .map((item, idx) => {
+          // Generate a unique color using HSL or any method
+          const color = `hsl(${(idx * 50) % 360}, 70%, 50%)`; // different hue for each
+
+          // Case 1: GeoJSON feature exists
+          if (item.site_data?.feature) {
+            return {
+              ...item.site_data.feature,
+              id: item.id,
+              properties: {
+                ...item.site_data.feature.properties,
+                zone_id: item.zone_id,
+                country: item.country,
+                color, // add dynamic color here
+              },
+            };
+          }
+
+          // Case 2: Array of coordinates
+          if (Array.isArray(item.site_data) && item.site_data.length > 2) {
+            const points = item.site_data.map((s) => [s.LONGITUDE, s.LATITUDE]);
+            if (
+              points[0][0] !== points[points.length - 1][0] ||
+              points[0][1] !== points[points.length - 1][1]
+            ) {
+              points.push(points[0]); // close polygon
+            }
+
+            const polygon = turf.polygon([points], {
+              zone_id: item.zone_id,
+              id: item.id,
+              color, // add dynamic color here
+            });
+            polygon.id = item.id;
+            return polygon;
+          }
+
+          return null;
+        })
+        .filter((f) => f !== null);
+
+      if (features.length === 0) {
+        console.warn("No valid polygons found");
+        return;
+      }
+
+      // 🟢 Add GeoJSON source
+      map.addSource("user-polygons", {
+        type: "geojson",
+        data: {
+          type: "FeatureCollection",
+          features,
+        },
+      });
+
+      // Fill layer with data-driven color
+      map.addLayer({
+        id: "user-polygons-fill",
+        type: "fill",
+        source: "user-polygons",
+        paint: {
+          "fill-color": ["get", "color"], // use the feature's 'color' property
+          "fill-opacity": 0.5,
+        },
+      });
+
+      // Outline layer
+      map.addLayer({
+        id: "user-polygons-outline",
+        type: "line",
+        source: "user-polygons",
+        paint: {
+          "line-color": "#000000",
+          "line-width": 1.5,
+        },
+      });
+
+      console.log("✅ Polygons loaded successfully with unique colors");
+    } else {
+      console.warn("No polygons found");
+    }
+  } catch (err) {
+    console.error("Error loading polygons:", err);
+    alert("Error loading polygons");
+  }
+};
+
+
   const rebuildMapSourcesAndLayers = () => {
     console.log("🟠 rebuildMapSourcesAndLayers() called");
 
@@ -723,60 +2181,133 @@ const findRepresentativeCell = (props, geojsonData) => {
       }
       // ⭐ ADD THIS: Global polygon loader for uploaded ZIP shapefile
       window.loadPolygonLayer = function (geojson) {
-        console.log("🌍 Loading custom polygon layer...", geojson);
+      console.log("🌍 Loading custom polygon layer...", geojson);
 
-        const map = mapInstance.current;
-        if (!map) {
-          console.error("❌ Map not ready");
-          return;
-        }
+      const map = mapInstance.current;
+      if (!map) {
+        console.error("❌ Map instance is not ready.");
+        return;
+      }
 
-        // Remove old layer/source if present
-        if (map.getLayer("custom-polygon-fill"))
-          map.removeLayer("custom-polygon-fill");
-        if (map.getLayer("custom-polygon-outline"))
-          map.removeLayer("custom-polygon-outline");
-        if (map.getSource("custom-polygon-source"))
-          map.removeSource("custom-polygon-source");
+      // Remove old layers and sources if they exist
+      if (map.getLayer("custom-polygon-fill")) {
+        map.removeLayer("custom-polygon-fill");
+      }
+      if (map.getLayer("custom-polygon-outline")) {
+        map.removeLayer("custom-polygon-outline");
+      }
+      if (map.getSource("custom-polygon-source")) {
+        map.removeSource("custom-polygon-source");
+      }
 
-        // Add fresh source
-        map.addSource("custom-polygon-source", {
-          type: "geojson",
-          data: geojson,
-        });
+      // Add a new GeoJSON source
+      map.addSource("custom-polygon-source", {
+        type: "geojson",
+        data: geojson,
+      });
 
-        // Fill layer
+      // Verify GeoJSON source
+      const source = map.getSource("custom-polygon-source");
+      if (source) {
+        console.log("✅ GeoJSON source loaded:", source._data);
+      } else {
+        console.error("❌ GeoJSON source not found.");
+        return;
+      }
+
+      // Inspect GeoJSON features
+      geojson.features.forEach((feature) => {
+        console.log("Feature Geometry:", feature.geometry);
+        console.log("Feature Properties:", feature.properties);
+      });
+
+      const fillColorExpression = buildMatchExpression(geojson);
+
+      // Add the fill layer with static color
+      try {
         map.addLayer({
           id: "custom-polygon-fill",
           type: "fill",
           source: "custom-polygon-source",
           paint: {
-            "fill-color": "#0080ff",
-            "fill-opacity": 0.25,
+            "fill-color": fillColorExpression,
+            "fill-opacity": 0.8, 
           },
         });
+        console.log("✅ Fill layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding fill layer:", error);
+      }
 
-        // Outline layer
+      // Add the outline layer
+      try {
         map.addLayer({
           id: "custom-polygon-outline",
           type: "line",
           source: "custom-polygon-source",
           paint: {
-            "line-color": "#0040ff",
+            "line-color": "#ff40ff",
             "line-width": 2,
           },
         });
+        console.log("✅ Outline layer added successfully.");
+      } catch (error) {
+        console.error(" Error adding outline layer:", error);
+      }
 
-        // Auto zoom
-        try {
-          const bbox = turf.bbox(geojson);
-          map.fitBounds(bbox, { padding: 40 });
-        } catch (e) {
-          console.warn("Could not fit polygon bbox:", e);
-        }
+      // useEffect(() => {
+      //   if (!mapInstance.current || drawRef.current) return;
 
-        console.log("✅ Custom polygon rendered.");
-      };
+      //   const draw = new MapboxDraw({
+      //     displayControlsDefault: false,
+      //     userProperties: true,
+      //     modes: {
+      //       ...MapboxDraw.modes,
+      //       draw_circle: CircleMode,
+      //       draw_freehand: FreehandMode,
+      //     },
+      //     styles: [
+      //       // Default Mapbox Draw styles or custom styles here
+      //       {
+      //         id: 'gl-draw-polygon-fill-inactive',
+      //         type: 'fill',
+      //         filter: ['all', ['==', 'active', 'false'], ['==', '$type', 'Polygon']],
+      //         paint: { 'fill-color': '#3bb2d0', 'fill-opacity': 0.2 }
+      //       },
+      //       {
+      //         id: 'gl-draw-polygon-stroke-active',
+      //         type: 'line',
+      //         filter: ['all', ['==', 'active', 'true'], ['==', '$type', 'Polygon']],
+      //         paint: { 'line-color': '#fbb03b', 'line-dasharray': [0.2, 2], 'line-width': 2 }
+      //       }
+      //     ]
+      //   });
+
+      //   mapInstance.current.addControl(draw);
+      //   drawRef.current = draw;
+
+      //   // Event Listeners
+      //   mapInstance.current.on('draw.create', handleDrawCreate);
+      //   mapInstance.current.on('draw.modechange', (e) => {
+      //     setIsDrawing(e.mode !== 'simple_select');
+      //   });
+
+      //   return () => {
+      //     if (mapInstance.current && drawRef.current) {
+      //       mapInstance.current.removeControl(drawRef.current);
+      //     }
+      //   };
+      // }, [mapInstance.current]);
+
+
+      // Auto zoom to fit the polygon bounds
+      try {
+        const bbox = turf.bbox(geojson); // Calculate bounding box using Turf.js
+        map.fitBounds(bbox, { padding: 40 });
+      } catch (error) {
+        console.warn("⚠️ Could not fit polygon bounding box:", error);
+      }
+    };
 
       // highlighted feature
       if (!map.getLayer("highlighted-feature-layer")) {
@@ -959,6 +2490,7 @@ setShowInfoPanel(true);
       if (map.getSource("sectors")) map.getSource("sectors").setData(empty);
       return;
     }
+    
 
     const features = geojsonData.features;
     const tableTypeLower = (tableType || "").toLowerCase();
@@ -968,9 +2500,21 @@ setShowInfoPanel(true);
     const isCmRemarks =
       tableTypeLower.includes("cm change") &&
       cmColorColumn.trim().toLowerCase() === "remarks";
+      
 
     // 0) Precompute CM buckets (global) if needed (ONLY when NOT remarks mode)
     let cmBands = cmLegend && cmLegend.length ? cmLegend : null;
+    // ⭐ ALWAYS sync from Sidebar colorRanges if available
+if (colorColumn && colorRanges[colorColumn]) {
+  cmBands = Object.entries(colorRanges[colorColumn]).map(
+    ([color, [from, to]]) => ({
+      from: Number(from),
+      to: Number(to),
+      color
+    })
+  );
+}
+
     if (tableTypeLower.includes("cm change") && !cmBands && !isCmRemarks) {
       const scores = [];
       features.forEach((f) => {
@@ -1013,108 +2557,137 @@ setShowInfoPanel(true);
 
     const sectorFeatures = [];
 
-    // 🌈 GENERATION FAN MODE (if any feature has "generation")
-    const hasGeneration = features.some((f) => f.properties?.generation);
+        // 🌈 GENERATION FAN MODE (FIXED CONCENTRIC GENERATION RINGS)
+const hasGeneration = features.some((f) => f.properties?.generation);
+console.log("🧪 hasGeneration =", hasGeneration, {
+  expandBandMode,
+  legendMode,
+  totalFeatures: features.length,
+});
 
-    if (hasGeneration && !expandBandMode) {
-      const SLICE_SPANS = [
-        { start: 0, end: 60 },
-        { start: 120, end: 180 },
-        { start: 240, end: 300 },
-      ];
+if (hasGeneration && !expandBandMode) {
+  console.log("🚀 ENTERED FIXED GENERATION FAN MODE");
 
-      const bySite = {};
-      for (const f of features) {
-        const p = f.properties || {};
-        const site = String(getSiteId(p) || "").trim();
-        const gen = p.generation;
-        if (!site || !gen) continue;
-        if (!bySite[site]) bySite[site] = [];
-        bySite[site].push(f);
-      }
+  const SLICE_SPANS = [
+    { start: 0, end: 60 },
+    { start: 120, end: 180 },
+    { start: 240, end: 300 },
+  ];
 
-      const GEN_ORDER = ["2G", "3G", "4G", "5G"];
-      const totalRadius = radiusScale;
-      const GAP_RATIO = 0.12;
+  // 🔒 FIXED generation order (inner → outer)
+  const GEN_ORDER = ["5G", "4G", "3G", "2G"];
 
-      Object.entries(bySite).forEach(([site, feats]) => {
-        const gensAtSite = Array.from(
-          new Set(feats.map((f) => f.properties.generation))
-        );
-        const ordered = GEN_ORDER.filter((g) => gensAtSite.includes(g));
-        if (!ordered.length) return;
+  // 🔒 FIXED relative radii (scaled by radiusScale)
+  const GEN_RADII = {
+    "5G": { inner: 0.0, outer: 1.0 },
+    "4G": { inner: 1.0, outer: 2.5 },
+    "3G": { inner: 2.5, outer: 4.5 },
+    "2G": { inner: 4.5, outer: 7.0 },
+  };
 
-        // compute centroid
-        const cents = feats.map((f) => turf.centroid(f).geometry.coordinates);
-        const cx = cents.reduce((s, c) => s + c[0], 0) / cents.length;
-        const cy = cents.reduce((s, c) => s + c[1], 0) / cents.length;
-        const center = [cx, cy];
+  // --- Group features by site ---
+  const bySite = {};
+  features.forEach((f) => {
+    const p = f.properties || {};
+    const site = String(getSiteId(p) || "").trim();
+    const gen = String(p.generation || "").toUpperCase();
+    if (!site || !gen) return;
+    if (!bySite[site]) bySite[site] = [];
+    bySite[site].push(f);
+  });
 
-        const ringCount = ordered.length;
-        const thickness = totalRadius / ringCount;
-        const gap = thickness * GAP_RATIO;
+  Object.entries(bySite).forEach(([site, feats]) => {
+    console.log("🏠 Site:", site, {
+      totalFeats: feats.length,
+      generations: Array.from(
+        new Set(feats.map((f) => f.properties?.generation))
+      ),
+    });
 
-        let outerR = totalRadius;
+    // 📍 Site centroid
+    const cents = feats.map((f) => turf.centroid(f).geometry.coordinates);
+    const cx = cents.reduce((s, c) => s + c[0], 0) / cents.length;
+    const cy = cents.reduce((s, c) => s + c[1], 0) / cents.length;
+    const center = [cx, cy];
 
-        ordered.forEach((gen) => {
-          const color =
-            generationColorMap[gen] || GENERATION_COLORS[gen] || "#777";
-          const innerR = Math.max(0.005, outerR - (thickness - gap));
+    // Group by generation
+    const byGen = {};
+    feats.forEach((f) => {
+      const g = String(f.properties?.generation || "").toUpperCase();
+      if (!byGen[g]) byGen[g] = [];
+      byGen[g].push(f);
+    });
 
-          SLICE_SPANS.forEach((span) => {
-            const wedge = createRingSlice(
-              center,
-              innerR,
-              outerR,
-              span.start,
-              span.end
-            );
+    // 🎯 Draw generations deterministically (inner → outer)
+    GEN_ORDER.forEach((gen) => {
+      const genFeats = byGen[gen];
+      if (!genFeats || !genFeats.length) return;
 
-            const ref = feats[0].properties || {};
-            const ct = turf.centroid(feats[0]).geometry.coordinates;
+      const R = GEN_RADII[gen];
+      const innerR = R.inner * radiusScale;
+      const outerR = R.outer * radiusScale;
 
-            sectorFeatures.push({
-              type: "Feature",
-              geometry: wedge.geometry,
-              properties: {
-                ...ref,
-                site_id: site,
-                generation: gen,
-                color,
-                fillColor: color,
-                lat: ref.lat || ref.Lat || ct[1],
-                lon: ref.lon || ref.Long || ct[0],
-              },
-            });
-          });
+      const color =
+        generationColorMap[gen] || GENERATION_COLORS[gen] || "#777";
 
-          outerR = innerR - gap;
-        });
+      console.log("🌀 Drawing generation", gen, {
+        site,
+        innerR,
+        outerR,
       });
 
-      // push data to map
-      const fc = { type: "FeatureCollection", features: sectorFeatures };
-      sectorsRef.current = fc;
-      if (map.getSource("sectors")) {
-        map.getSource("sectors").setData(fc);
-      }
+      SLICE_SPANS.forEach((span) => {
+        const wedge = createRingSlice(
+          center,
+          innerR,
+          outerR,
+          span.start,
+          span.end
+        );
 
-      setLegendMode("generation");
-      setShowLegend(true);
+        const ref = genFeats[0].properties || {};
+        const ct = turf.centroid(genFeats[0]).geometry.coordinates;
 
-      // Auto-zoom when DB changes
-      if (selectedDB && lastZoomedDB.current !== selectedDB) {
-        lastZoomedDB.current = selectedDB;
-        setTimeout(() => {
-          try {
-            const bbox = turf.bbox(fc);
-            map.fitBounds(bbox, { padding: 60, maxZoom: 15, essential: true });
-          } catch (e) {}
-        }, 300);
-      }
+        sectorFeatures.push({
+          type: "Feature",
+          geometry: wedge.geometry,
+          properties: {
+            ...ref,
+            site_id: site,
+            generation: gen,
+            color,
+            fillColor: color,
+            lat: ref.lat || ref.Lat || ct[1],
+            lon: ref.lon || ref.Long || ct[0],
+          },
+        });
+      });
+    });
+  });
 
-      return; // skip normal band rendering
-    }
+  // 🚀 Push to map
+  const fc = { type: "FeatureCollection", features: sectorFeatures };
+  sectorsRef.current = fc;
+  if (map.getSource("sectors")) {
+    map.getSource("sectors").setData(fc);
+  }
+
+  setLegendMode("generation");
+  setShowLegend(true);
+
+  // 🔍 Auto zoom on DB change
+  if (selectedDB && lastZoomedDB.current !== selectedDB) {
+    lastZoomedDB.current = selectedDB;
+    setTimeout(() => {
+      try {
+        const bbox = turf.bbox(fc);
+        map.fitBounds(bbox, { padding: 60, maxZoom: 15, essential: true });
+      } catch (e) {}
+    }, 300);
+  }
+
+  return; // ⛔ skip normal band rendering
+}
 
     // ⭐ FINAL — Balanced FIXED-RADIUS GEN + BAND MODE (perfect concentric)
     if (expandBandMode) {
@@ -1701,6 +3274,7 @@ setShowInfoPanel(true);
     JSON.stringify(alarmLegend),
     JSON.stringify(trafficLegend),
     expandBandMode,
+    colorColumn
   ]);
 
   /* ---------------- Drive test layer ---------------- */
@@ -1922,7 +3496,368 @@ setShowInfoPanel(true);
   }, [highlightedFeature, internalHighlight]);
 
   /* ---------------- Toolbar helpers ---------------- */
+   const handleDriveTestFileChange = async (e) => {
+    const file = e.target.files[0];
+    setDriveTestFile(file);
+    if (!file) return;
 
+    setFetchingKPI(true);
+    setKpiProgress(0);
+
+    const interval = setInterval(() => {
+      setKpiProgress((prev) => (prev < 95 ? prev + 5 : prev));
+    }, 100);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/upload-drive-test`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+      if (!response.ok) throw new Error(`Error: ${response.status}`);
+      const result = await response.json();
+
+      // ✅ Extract and store all columns
+      if (result.available_kpis?.length)
+        setDriveTestColumns(result.available_kpis);
+
+      // ✅ Filter KPIs to only signal metrics
+      setAvailableDriveKPIs(
+        (result.available_kpis || []).filter(
+          (k) =>
+            k.toUpperCase().includes("RSRP") ||
+            k.toUpperCase().includes("RSRQ") ||
+            k.toUpperCase().includes("SINR") ||
+            k.toUpperCase().includes("EARFCN")
+        )
+      );
+
+      // ✅ Pick default KPI and fetch its range immediately
+      if (result.available_kpis?.length > 0) {
+        const defaultKPI = result.available_kpis[0];
+        setSelectedDriveKPI(defaultKPI);
+
+        try {
+          const res = await fetch(
+            `${
+              import.meta.env.VITE_API_URL
+            }/drive-test/column-range?column=${encodeURIComponent(defaultKPI)}`
+          );
+          const range = await res.json();
+          if (range.min != null && range.max != null)
+            setDriveLayerRange({ min: range.min, max: range.max });
+        } catch (err) {
+          console.error("❌ Failed to fetch drive test column range", err);
+        }
+      }
+
+      // Notify parent
+      if (onDriveTestUpload)
+        onDriveTestUpload(file, result.available_kpis?.[0] || selectedDriveKPI);
+    } catch (err) {
+      console.error("Upload failed:", err.message);
+    } finally {
+      clearInterval(interval);
+      setKpiProgress(100);
+      setTimeout(() => {
+        setFetchingKPI(false);
+        setKpiProgress(0);
+      }, 300);
+    }
+  };
+
+  // === KPI Change Handler ===
+  const handleDriveKPIChange = async (e) => {
+    const kpi = e.target.value;
+    setSelectedDriveKPI(kpi);
+    if (!kpi) return;
+
+    setFetchingKPI(true);
+    setKpiProgress(0);
+
+    const interval = setInterval(() => {
+      setKpiProgress((prev) => (prev < 95 ? prev + 5 : prev));
+    }, 100);
+
+    try {
+      const res = await fetch(
+        appendDateParams(
+          `${getApiBaseUrl()}/drive-test/column-range?column=${encodeURIComponent(
+            kpi
+          )}`
+        )
+      );
+
+      const range = await res.json();
+      if (range.min != null && range.max != null)
+        setDriveLayerRange({ min: range.min, max: range.max });
+    } catch (err) {
+      console.error("❌ Failed to fetch drive test column range", err);
+    } finally {
+      clearInterval(interval);
+      setKpiProgress(100);
+      setTimeout(() => {
+        setFetchingKPI(false);
+        setKpiProgress(0);
+      }, 300);
+    }
+
+    // Notify parent
+    if (driveTestFile && onDriveTestUpload)
+      onDriveTestUpload(driveTestFile, kpi);
+  };
+const handleGridMapFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // start loader
+    setFetchingGridKPI(true);
+    setGridKpiProgress(0);
+
+    // animate progress
+    const interval = setInterval(() => {
+      setGridKpiProgress((prev) => (prev < 90 ? prev + 5 : prev));
+    }, 120);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      // 🔼 Upload to backend
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/upload-grid-map`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!res.ok) {
+        throw new Error(`Grid map upload failed: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+
+      // ✅ Populate KPI dropdown
+      if (Array.isArray(data.available_kpis)) {
+        setGridKPIColumns(data.available_kpis);
+
+        // 🔑 mark KPI source as file
+        setKpiSource({ type: "file", table: null });
+      } else {
+        setGridKPIColumns([]);
+        setKpiSource({ type: null, table: null });
+      }
+
+      // ✅ Push GeoJSON to parent (App or MapRenderer)
+      if (data.geojson) {
+        onGridData?.(data.geojson);
+      }
+    } catch (err) {
+      console.error("❌ Grid map upload failed:", err);
+      toast.error(
+        "Grid map upload failed. Please check the file format or backend logs."
+      );
+    } finally {
+      clearInterval(interval);
+      setGridKpiProgress(100);
+      setTimeout(() => {
+        setFetchingGridKPI(false);
+        setGridKpiProgress(0);
+      }, 500);
+    }
+  };
+
+  const [localSelectedGridKPI, setLocalSelectedGridKPI] = React.useState(
+    selectedGridKPI ?? null
+  );
+  const [addingColor, setAddingColor] = useState(false);
+  const [newColorName, setNewColorName] = useState("");
+  const bandSortOrder = (band) => {
+    const numericPart = parseInt(band.replace(/[^\d]/g, "")); // L21 -> 21
+    return isNaN(numericPart) ? 0 : numericPart;
+  };
+
+  useEffect(() => {
+    if (kpiSource.type === "file") return;
+
+    const chosen =
+      Array.isArray(targetTables) && targetTables.length
+        ? targetTables[targetTables.length - 1] // most recent selection
+        : null;
+
+    if (!chosen) {
+      setGridKPIColumns([]);
+      setKpiSource({ type: null, table: null });
+      setGridMapGeoJSON(null);
+      return;
+    }
+
+    // ✅ One API call for both columns + geojson
+    fetch(
+      appendDateParams(
+        `${getApiBaseUrl()}/grid-map/from-table?table=${encodeURIComponent(
+          chosen
+        )}`
+      )
+    )
+      .then((r) => r.json())
+      .then((data) => {
+        // Columns for KPI dropdown
+        if (Array.isArray(data.available_kpis)) {
+          setGridKPIColumns(data.available_kpis);
+        } else {
+          setGridKPIColumns([]);
+        }
+
+        // GeoJSON for heatmap
+        if (data?.geojson?.features?.length) {
+          setGridMapGeoJSON(data.geojson);
+          onGridData?.(data.geojson); // push to parent/map if needed
+        } else {
+          setGridMapGeoJSON(null);
+        }
+
+        setKpiSource({ type: "target", table: chosen });
+      })
+      .catch((err) => {
+        console.error("❌ Failed fetching grid map from target table:", err);
+        setGridKPIColumns([]);
+        setGridMapGeoJSON(null);
+        setKpiSource({ type: "target", table: chosen });
+      });
+  }, [targetTables, kpiSource.type]);
+
+  React.useEffect(() => {
+    if (localSelectedGridKPI && localSelectedGridKPI !== selectedGridKPI) {
+      setSelectedGridKPI(localSelectedGridKPI);
+    }
+  }, [localSelectedGridKPI, selectedGridKPI, setSelectedGridKPI]);
+  // Dropdown rendering helper
+  const renderDropdown = (key, options, multiple, value, setValue) => {
+    const searchText = searchTexts[key] || "";
+
+    // ✅ Ensure options is always an array — prevent `.filter` crash
+    let safeOptions = [];
+    if (Array.isArray(options)) {
+      safeOptions = options;
+    } else if (typeof options === "object" && options !== null) {
+      // Handle case like { columns: [...] } or object with keys
+      if (Array.isArray(options.columns)) {
+        safeOptions = options.columns;
+      } else {
+        console.warn(
+          `⚠️ renderDropdown[${key}] received object instead of array:`,
+          options
+        );
+        safeOptions = Object.values(options)
+          .flat()
+          .filter((v) => typeof v === "string");
+      }
+    } else if (typeof options === "string") {
+      safeOptions = [options];
+    } else if (options == null) {
+      safeOptions = [];
+    } else {
+      console.warn(
+        `⚠️ renderDropdown[${key}] received invalid options type:`,
+        typeof options,
+        options
+      );
+    }
+
+    const filteredOptions = safeOptions.filter((opt) =>
+      String(opt).toLowerCase().includes(searchText.toLowerCase())
+    );
+
+    return (
+      <div
+        className="dropdown-wrapper"
+        ref={(el) => (dropdownRefs.current[key] = el)}
+      >
+      <input
+            className="input"
+            readOnly
+            value={
+              multiple
+                ? Array.isArray(value) && value.length
+                  ? value.join(", ")
+                  : ""
+                : value ?? ""
+            }
+            placeholder={`Select ${key}`}
+            onClick={() =>
+              setShowDropdowns((prev) => ({ ...prev, [key]: !prev[key] }))
+            }
+          />
+
+
+        {showDropdowns[key] && (
+          <div className="dropdown-list">
+            {/* 🔍 Search bar */}
+            <input
+              type="text"
+              className="input search-input"
+              placeholder="Search..."
+              value={searchTexts[key] ?? ""}
+              onChange={(e) =>
+                setSearchTexts((prev) => ({ ...prev, [key]: e.target.value }))
+              }
+              autoFocus
+            />
+
+            {/* ✅ Render list safely */}
+            {filteredOptions.map((option) => (
+              <div
+                key={`${key}-${option}`}
+                className={`dropdown-item ${
+                  multiple && Array.isArray(value) && value.includes(option)
+                    ? "selected"
+                    : ""
+                }`}
+                onClick={() => {
+                  if (multiple) {
+                    const safeValue = Array.isArray(value) ? value : [];
+                    const newValue = safeValue.includes(option)
+                      ? safeValue.filter((item) => item !== option)
+                      : [...safeValue, option];
+                    setValue(newValue);
+                  } else {
+                    setValue(option);
+                    setShowDropdowns((prev) => ({ ...prev, [key]: false }));
+                  }
+                }}
+              >
+                {option}
+              </div>
+            ))}
+
+            {/* 🧾 No matches fallback */}
+            {filteredOptions.length === 0 && (
+              <div className="dropdown-item disabled">No matches</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  {
+    /* === KPI Grid Uploader === */
+  }
+  <div className="sidebar-section">
+    <h3>Grid Heatmap</h3>
+    <KPIGridUploader onGridData={setGridData} />
+  </div>;
+
+function getColorLabel(hex) {
+  return colorNameMap[hex.toLowerCase()] || hex;
+}
   const applyStyle = (nextStyle) => {
     const map = mapInstance.current;
     if (!map) return;
@@ -2844,12 +4779,15 @@ setShowInfoPanel(true);
 
   return (
     <>
-      {/* 🔍 Search + Band Expander Toggle (top-right offset) */}
+      
+    
+      
+
       <div
         style={{
           position: "fixed",
           top: 10,
-          right: 320,
+          right: 420,
           zIndex: 10001,
           display: "flex",
           flexDirection: "column",
@@ -2905,7 +4843,7 @@ setShowInfoPanel(true);
           style={{
             position: "relative",
             top: 3, // ⬅ move down slightly
-            right: -378, // ⬅ move slightly to the right
+            right: -478, // ⬅ move slightly to the right
           }}
         >
           <button
@@ -3199,6 +5137,7 @@ setShowInfoPanel(true);
       )}
 
       {/* 🧰 Toolbar (top-right vertical stack) */}
+
       <div
         style={{
           position: "absolute",
@@ -3283,6 +5222,362 @@ setShowInfoPanel(true);
         >
           🔍
         </button> */}
+        {/* 🧱 Polygon Tool — SINGLE VISUAL UNIT */}
+<div
+  style={{
+    position: "relative",
+    width: 36,           // 🔒 fixed footprint (does NOT affect others)
+    height: 36,
+  }}
+>
+  {/* 🧩 SHARED BACKGROUND (makes it look ONE) */}
+  {/* <div
+    style={{
+      position: "absolute",
+      inset: 0,
+      background: "#ffffff",
+      borderRadius: 10,
+      boxShadow: "0 4px 14px rgba(0,0,0,0.18)",
+      zIndex: 1,
+    }}
+  /> */}
+
+<button
+  onClick={() => setShowPolygonPanel((v) => !v)}
+  title="Polygon Tools"
+  style={{
+    width: 36,          // 🔽 reduced width
+    height: 22,         // balanced height
+    borderRadius: 5,
+
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+
+    fontSize: 15,       // slightly smaller to fit slim button
+    fontWeight: 700,
+
+    background: showPolygonPanel ? "#f81307" : "#b4fec2",
+    color: showPolygonPanel ? "#ffffff" : "#1aa585",
+
+    border: "1px solid #070707",
+    outline: "none",
+
+    boxShadow: showPolygonPanel
+      ? "0 0 6px rgba(248,19,7,0.55)"   // red glow when active
+      : "0 0 4px rgba(26,165,133,0.45)",
+
+    padding: 0,        // ✅ prevents width expansion
+    lineHeight: 1,
+
+    transition: "all 0.15s ease",
+    cursor: "pointer",
+  }}
+>
+  ⬟
+</button>
+
+
+  {/* 🔧 EXPANDED TOOLS — SAME VISUAL SURFACE */}
+  <div
+    style={{
+  position: "absolute",
+  right: "100%",              // attaches to button edge
+  top: 0,                     // SAME vertical origin
+  height: 22,                 // SAME height as main button
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+
+  padding: "0 6px",
+  background: showPolygonPanel ? "#94faa9" : "#b4fec2", // SAME surface
+  border: "1px solid #070707",
+  borderRight: "none",        // seamless join
+  borderRadius: "5px 0 0 5px",
+
+  boxShadow: showPolygonPanel
+    ? "0 0 6px rgba(248,19,7,0.45)"
+    : "0 0 4px rgba(26,165,133,0.35)",
+
+  transform: showPolygonPanel
+    ? "scaleX(1)"
+    : "scaleX(0)",
+  transformOrigin: "right center",
+
+  opacity: showPolygonPanel ? 1 : 0,
+  pointerEvents: showPolygonPanel ? "auto" : "none",
+
+  transition: "transform 0.18s ease, opacity 0.15s ease",
+  zIndex: 1,
+}}
+
+  >
+    <button
+      onClick={() => activateTool("draw_polygon")}
+      className="icon-btn"
+      title="Draw Polygon"
+    >
+      <Pentagon size={16} />
+    </button>
+
+    <button
+      onClick={() => activateTool("draw_freehand")}
+      className="icon-btn"
+      title="Freehand Draw"
+    >
+      <Pencil size={16} />
+    </button>
+
+    <button
+      onClick={() => {
+        drawRef.current?.deleteAll();
+        setPolygonCount(0);
+      }}
+      className="icon-btn"
+      title="Clear Polygons"
+    >
+      <Trash2 size={16} />
+    </button>
+    <div style={{ position: "relative" }}>
+      <button
+        onClick={() => setShowPolygonList((v) => !v)}
+        className="icon-btn"
+        title="Saved Zones"
+      >
+        <Save size={16} />
+      </button>
+      <>
+      {/* Open main polygon popup */}
+      {showPolygonList && (
+        <div className="polygon-overlay" onClick={() => setShowPolygonList(false)}>
+          <div className="polygon-modal" onClick={(e) => e.stopPropagation()}>
+            {/* BODY */}
+            <div className="polygon-body">
+              {/* LEFT PANEL — PROJECT */}
+              <div className="polygon-panel project-panel">
+                Project Specific Polygon List
+
+                {/* ===== SHP POPUP INSIDE LEFT PANEL ===== */}
+                {showShpPopup && (
+                  <div className="shp-popup-inside-panel">
+                    <h4>Select SHP File</h4>
+                    <div className="shp-list">
+                      {polygonFiles.map((file) => (
+                        <div
+                          key={file}
+                          className={`shp-item ${selectedShpFile === file ? "active" : ""}`}
+                          onClick={() => setSelectedShpFile(file)}
+                        >
+                          {file}
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="shp-footer">
+                      <button
+                        className="btnStyle"
+                        disabled={!selectedShpFile}
+                        onClick={() => {
+                          if (!selectedShpFile) return;
+                          fetchProjectZones(selectedShpFile);
+                        }}
+                      >
+                        Continue
+                      </button>
+                      <button className="btnStyle danger" onClick={() => setShowShpPopup(false)}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* ===== LIST ZONES AFTER SHP SELECT ===== */}
+                {projectZones.length > 0 && (
+                  <div className="polygon-scroll">
+                    {projectZones.length > 0 && (
+              <div className="polygon-scroll">
+                {projectZones
+                  .slice()
+                  .sort((a, b) => {
+                    const idA = Number(a.id);
+                    const idB = Number(b.id);
+                    return idA - idB;
+                  })
+                  .map((lp, index) => (
+                    <div
+                      key={lp.id}
+                      className={`polygon-row ${
+                        selectedPolygon?.id === lp.id
+                          ? "active"
+                          : index % 2 === 0
+                          ? "even"
+                          : "odd"
+                      }`}
+                      onClick={() => setSelectedPolygon(lp)}
+                    >
+                 
+                       <div className="zone-id">{lp.zone_id}</div>
+                      <div className="zone-name">{lp.zone_name}</div>
+                     
+                    </div>
+                  ))}
+              </div>
+            )}
+
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT PANEL — USER */}
+              <div className="polygon-panel user-panel">
+                <div className="panel-title">User Specific Polygon List</div>
+                <div className="polygon-scroll">
+                  {listpolygon.map((lp, index) => (
+                    <div
+                      key={lp.id}
+                      className={`polygon-row ${
+                        userselectedPolygon?.id === lp.id
+                          ? "active"
+                          : index % 2 === 0
+                          ? "even"
+                          : "odd"
+                      }`}
+                      onClick={() => setUserSelectedPolygon(lp)}
+                    >
+                      <div className="zone-id">{lp.zone_id}</div>
+                      <div className="zone-name">{lp.zone_name}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+
+            {/* FOOTER */}
+            <div className="polygon-footer">
+              {/* LEFT FOOTER */}
+              <div className="footer-section">
+                {userRole === "USER" && (
+                  <div className="project-footer">
+                    <button className="btnStyle primary" onClick={onButtonClick}>
+                      Choose File
+                    </button>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={handlePolygonZipUpload}
+                      accept=".zip"
+                      className="hidden-input"
+                    />
+
+                    <button
+                    className="btnStyle primary"
+                    disabled={!selectedPolygon}
+                    onClick={() => {
+                      const geojson = {
+                        type: "FeatureCollection",
+                        features: [
+                          {
+                            type: "Feature",
+                            geometry: selectedPolygon.geometry,
+                            properties: {
+                              id: selectedPolygon.id,
+                              zone_id: selectedPolygon.zone_id,
+                              zone_name: selectedPolygon.zone_name,
+                            },
+                          },
+                        ],
+                      };
+
+                      console.log("📦 Final GeoJSON:", geojson);
+
+                      window.loadPolygonLayer(geojson);
+                      setShowPolygonList(false)
+                    }}
+                  >
+                    Upload
+                  </button>
+
+
+                  </div>
+                )}
+              </div>
+
+              {/* RIGHT FOOTER */}
+              <div className="footer-section">
+                <button
+                  className="btnStyle secondary"
+                  onClick={() => {handleApply(userselectedPolygon),console.log(userselectedPolygon) }}
+                  disabled={!userselectedPolygon}
+                >
+                  Apply
+                </button>
+                <button className="btnStyle danger" onClick={() => setShowPolygonList(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+
+    
+</div>
+  </div> 
+  {/* Drive & Grid buttons anchored under polygon */}
+    <div
+  style={{
+    position: "absolute",
+    left: 0,
+    top: "100%",
+    marginTop: 6,
+    transform: "translate(-2px, -13px)",// lifts buttons up
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+    alignItems: "center",
+    zIndex: 2,
+  }}
+>
+  <button
+    onClick={() => setShowDrivePanel((v) => !v)}
+    className="icon-btn"
+    title="Drive Test"
+    style={{
+      width: 36,
+      height: 22,
+      padding: 0,
+      fontSize: 13,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    }}
+  >
+    📡
+  </button>
+
+  <button
+    onClick={() => setShowGridPanel((v) => !v)}
+    className="icon-btn"
+    title="Grid Heatmap"
+    style={{
+      width: 36,
+      height: 22,
+      padding: 0,
+      fontSize: 13,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+    }}
+  >
+    🔥
+  </button>
+</div>
+
+</div>
+
+        
       </div>
 
       {/* Distance box for ruler */}
@@ -3300,6 +5595,581 @@ setShowInfoPanel(true);
           color: "#333",
         }}
       />
+      {showDrivePanel && (
+  <div className="center-overlay" onClick={() => setShowDrivePanel(false)}>
+    <div className="center-modal" onClick={e => e.stopPropagation()}>
+
+      <div>
+        {/* === Drive Test Upload === */}
+        <div className="form-section">
+          <label htmlFor="driveTestFile">📂 Upload Drive Test File</label>
+          <input
+            id="driveTestFile"
+            type="file"
+            accept=".csv,.xlsx,.xls,.geojson,.json"
+            onChange={handleDriveTestFileChange}
+            style={{ display: "block", marginTop: "6px" }}
+          />
+
+          {/* Progress Bar */}
+          {fetchingKPI && (
+            <div
+              style={{
+                height: "4px",
+                background: "#e0e0e0",
+                borderRadius: "2px",
+                marginTop: "4px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${kpiProgress}%`,
+                  background: "#4caf50",
+                  transition: "width 0.2s",
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* === Drive Test KPI Selection === */}
+        <label>Select Drive Test KPI</label>
+        {renderDropdown(
+          "driveKPI",
+          driveTestColumns,
+          false,
+          selectedDriveKPI,
+          (selected) => {
+            setSelectedDriveKPI(selected);
+            if (!selected) return;
+
+            setFetchingKPI(true);
+            setKpiProgress(0);
+
+            // Animate progress bar
+            const interval = setInterval(() => {
+              setKpiProgress((prev) => (prev < 95 ? prev + 5 : prev));
+            }, 100);
+
+            fetch(
+              `${import.meta.env.VITE_API_URL}/drive-test/column-range?column=${encodeURIComponent(
+                selected
+              )}`
+            )
+              .then((res) => res.json())
+              .then(({ min, max }) => {
+                if (typeof min === "number" && typeof max === "number") {
+                  setDriveLayerRange({ min, max });
+
+                  const step = (max - min) / 3;
+                  const defaultBands = {
+                    "#00ff00": [min, min + step],
+                    "#ffff00": [min + step, min + 2 * step],
+                    "#ff0000": [min + 2 * step, max],
+                  };
+
+                  setLocalColorRanges((prev) => {
+                    const newRanges = {
+                      ...prev,
+                      [selected]: prev[selected] || defaultBands,
+                    };
+
+                    // ✅ Immediately trigger drive test layer redraw
+                    window.refreshDriveTestLayer?.(selected);
+
+                    return newRanges;
+                  });
+                } else {
+                  setDriveLayerRange({ min: null, max: null });
+                }
+              })
+              .catch((err) => {
+                console.error("❌ Failed fetching KPI range:", err);
+                setDriveLayerRange({ min: null, max: null });
+              })
+              .finally(() => {
+                clearInterval(interval);
+                setKpiProgress(100);
+                setTimeout(() => {
+                  setFetchingKPI(false);
+                  setKpiProgress(0);
+                }, 300);
+
+                // Still refresh visuals
+                window.refreshDriveTestLayer?.();
+              });
+          }
+        )}
+
+        {/* === Range Info === */}
+        {selectedDriveKPI &&
+          driveLayerRange.min != null &&
+          driveLayerRange.max != null && (
+            <p
+              className="range-info"
+              style={{ fontSize: "10px", fontWeight: "bold" }}
+            >
+              Range <strong>{selectedDriveKPI}</strong>: {" "}
+              <span>
+                {driveLayerRange.min} – {driveLayerRange.max}
+              </span>
+            </p>
+          )}
+
+        {/* === Dynamic Color Bands for Drive Test KPI === */}
+        {selectedDriveKPI && localColorRanges[selectedDriveKPI] && (
+          <div className="color-range-wrapper">
+            {Object.entries(localColorRanges[selectedDriveKPI]).map(
+              ([color, [min, max]]) => (
+                <div
+                  key={color}
+                  className="color-range-row"
+                  style={{ marginBottom: "6px" }}
+                >
+                  <label style={{ minWidth: 70, fontWeight: 500 }}>
+                    {getColorLabel(color)}:
+                  </label>
+
+                  {/* Color Picker */}
+                  <input
+                    type="color"
+                    value={color.startsWith("#") ? color : ""}
+                    onChange={(e) => {
+                      const newColor = e.target.value;
+                      setLocalColorRanges((prev) => {
+                        const bands = { ...prev[selectedDriveKPI] };
+                        bands[newColor] = bands[color];
+                        delete bands[color];
+                        return { ...prev, [selectedDriveKPI]: bands };
+                      });
+                      window.refreshDriveTestLayer?.();
+                    }}
+                    style={{
+                      width: 24,
+                      height: 24,
+                      border: "none",
+                      marginRight: 8,
+                    }}
+                  />
+
+                  {/* Min */}
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: 70 }}
+                    value={min ?? ""}
+                    onChange={(e) => {
+                      setLocalColorRanges((prev) => ({
+                        ...prev,
+                        [selectedDriveKPI]: {
+                          ...prev[selectedDriveKPI],
+                          [color]: [Number(e.target.value), max],
+                        },
+                      }));
+                      window.refreshDriveTestLayer?.();
+                    }}
+                  />
+
+                  {/* Max */}
+                  <input
+                    type="number"
+                    className="input"
+                    style={{ width: 70 }}
+                    value={max ?? ""}
+                    onChange={(e) => {
+                      setLocalColorRanges((prev) => ({
+                        ...prev,
+                        [selectedDriveKPI]: {
+                          ...prev[selectedDriveKPI],
+                          [color]: [min, Number(e.target.value)],
+                        },
+                      }));
+                      window.refreshDriveTestLayer?.();
+                    }}
+                  />
+
+                  {/* Remove Band */}
+                  <button
+                    className="btn-remove"
+                    style={{ marginLeft: 6 }}
+                    onClick={() => {
+                      setLocalColorRanges((prev) => {
+                        const updated = { ...prev[selectedDriveKPI] };
+                        delete updated[color];
+                        return { ...prev, [selectedDriveKPI]: updated };
+                      });
+                      window.refreshDriveTestLayer?.();
+                    }}
+                  >
+                    ❌
+                  </button>
+                </div>
+              )
+            )}
+
+            {/* === Add New Color Band === */}
+            {!addingDriveColor ? (
+              <button
+                className="btn-add"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  setAddingDriveColor(true);
+                  setNewDriveColorHex("#0000ff");
+                  setNewDriveMin(driveLayerRange.min ?? 0);
+                  setNewDriveMax(driveLayerRange.max ?? 0);
+                }}
+              >
+                + Add Color Band
+              </button>
+            ) : (
+              <div
+                style={{
+                  display: "flex",
+                  gap: "8px",
+                  alignItems: "center",
+                  marginTop: 8,
+                }}
+              >
+                <input
+                  type="color"
+                  value={newDriveColorHex ?? ""}
+                  onChange={(e) => setNewDriveColorHex(e.target.value)}
+                  style={{ width: 32, height: 32, border: "none" }}
+                />
+                <input
+                  type="number"
+                  placeholder="Min"
+                  value={newDriveMin ?? ""}
+                  onChange={(e) => setNewDriveMin(Number(e.target.value))}
+                  className="input"
+                  style={{ width: 70 }}
+                />
+                <input
+                  type="number"
+                  placeholder="Max"
+                  value={newDriveMax ?? ""}
+                  onChange={(e) => setNewDriveMax(Number(e.target.value))}
+                  className="input"
+                  style={{ width: 70 }}
+                />
+                <button
+                  className="btn-add"
+                  onClick={() => {
+                    if (localColorRanges[selectedDriveKPI]?.[newDriveColorHex]) {
+                      toast.error("Color already exists!");
+                      return;
+                    }
+                    if (newDriveMin >= newDriveMax) {
+                      toast.error("Min must be less than Max.");
+                      return;
+                    }
+                    setLocalColorRanges((prev) => ({
+                      ...prev,
+                      [selectedDriveKPI]: {
+                        ...prev[selectedDriveKPI],
+                        [newDriveColorHex]: [newDriveMin, newDriveMax],
+                      },
+                    }));
+                    setAddingDriveColor(false);
+                    window.refreshDriveTestLayer?.();
+                  }}
+                >
+                  ✅ Add
+                </button>
+                <button
+                  className="btn-remove"
+                  style={{ marginLeft: 6 }}
+                  onClick={() => setAddingDriveColor(false)}
+                >
+                  ❌
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+    </div>
+  </div>
+)}
+{showGridPanel && (
+  <div className="center-overlay" onClick={() => setShowGridPanel(false)}>
+    <div className="center-modal" onClick={e => e.stopPropagation()}>
+
+      <div>
+        {/* === Grid Map / Heatmap Upload === */}
+        <div className="form-section">
+          <label htmlFor="gridMapFile">📂 Upload Grid Map File</label>
+          <input
+            id="gridMapFile"
+            type="file"
+            accept=".csv,.xlsx,.xls,.geojson,.json"
+            onChange={handleGridMapFileChange}
+            style={{ display: "block", marginTop: "6px" }}
+          />
+
+          {/* Progress Bar */}
+          {fetchingGridKPI && (
+            <div
+              style={{
+                height: "6px",
+                background: "#ddd",
+                borderRadius: "3px",
+                marginTop: "6px",
+                overflow: "hidden",
+              }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${gridKpiProgress}%`,
+                  background: "linear-gradient(90deg, #4caf50, #81c784)",
+                  transition: "width 0.15s ease-in-out",
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        <label>Select KPI for Heatmap</label>
+        {renderDropdown(
+          "gridKPI",
+          gridKPIColumns,
+          false,
+          selectedGridKPI,
+          async (selected) => {
+            setSelectedGridKPI(selected);
+            setSelectedLayerColumn?.(selected);
+
+            setFetchingGridKPI(true);
+            setGridKpiProgress(0);
+
+            const interval = setInterval(() => {
+              setGridKpiProgress((prev) => (prev < 90 ? prev + 5 : prev));
+            }, 120);
+
+            try {
+              let min, max;
+
+              if (kpiSource.type === "file") {
+                const res = await fetch(
+                  appendDateParams(
+                    `${getApiBaseUrl()}/grid-map/column-range?column=${encodeURIComponent(
+                      selected
+                    )}&table=${encodeURIComponent(phdbTable || "")}`
+                  )
+                );
+                ({ min, max } = await res.json());
+              } else if (kpiSource.type === "target" && kpiSource.table) {
+                const resRange = await fetch(
+                  `${import.meta.env.VITE_API_URL}/grid-map/column-range?column=${encodeURIComponent(
+                    selected
+                  )}&table=${encodeURIComponent(kpiSource.table)}`
+                );
+                ({ min, max } = await resRange.json());
+
+                const resData = await fetch(
+                  appendDateParams(
+                    `${getApiBaseUrl()}/grid-map/data?table=${encodeURIComponent(
+                      kpiSource.table
+                    )}`
+                  )
+                );
+                const geojson = await resData.json();
+                if (geojson?.features) {
+                  setGridMapGeoJSON(geojson);
+                  onGridData?.(geojson);
+                }
+              }
+
+              // ✅ Same range logic as before
+              if (typeof min === "number" && typeof max === "number") {
+                setGridLayerRange({ min, max });
+
+                const step = (max - min) / 3;
+                const defaultBands = {
+                  "#00ff00": [min, min + step],
+                  "#ffff00": [min + step, min + 2 * step],
+                  "#ff0000": [min + 2 * step, max],
+                };
+
+                setLocalColorRanges((prev) => {
+                  const newRanges = {
+                    ...prev,
+                    [selected]: prev[selected] || defaultBands,
+                  };
+                  return newRanges;
+                });
+
+                window.refreshGridLayer?.();
+              } else {
+                setGridLayerRange({ min: null, max: null });
+              }
+            } catch (err) {
+              console.error("❌ Failed fetching Grid KPI range/data:", err);
+              setGridLayerRange({ min: null, max: null });
+            } finally {
+              clearInterval(interval);
+              setGridKpiProgress(100);
+              setTimeout(() => {
+                setFetchingGridKPI(false);
+                setGridKpiProgress(0);
+              }, 500);
+            }
+          }
+        )}
+
+        {/* === Show KPI Source Info === */}
+        {(kpiSource.type === "file" || kpiSource.type === "target") && (
+          <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+            KPI source: {" "}
+            {kpiSource.type === "file" ? "Uploaded file" : `Table: ${kpiSource.table}`}
+          </div>
+        )}
+
+        {/* === Range Info === */}
+        {selectedGridKPI &&
+          gridLayerRange.min != null &&
+          gridLayerRange.max != null && (
+            <p className="range-info" style={{ fontSize: "10px", fontWeight: "bold" }}>
+              Range <strong>{selectedGridKPI}</strong>: {" "}
+              <span>
+                {gridLayerRange.min} – {gridLayerRange.max}
+              </span>
+            </p>
+          )}
+
+        {/* === Dynamic Color Bands for Heatmap KPI === */}
+        {selectedGridKPI && localColorRanges[selectedGridKPI] && (
+          <div className="color-range-wrapper">
+            {Object.entries(localColorRanges[selectedGridKPI]).map(([color, [min, max]]) => (
+              <div key={color} className="color-range-row" style={{ marginBottom: "6px" }}>
+                <label style={{ minWidth: 70, fontWeight: 500 }}>{getColorLabel(color)}:</label>
+
+                {/* Color Picker */}
+                <input
+                  type="color"
+                  value={color.startsWith("#") ? color : "#000000"}
+                  onChange={(e) => {
+                    const newColor = e.target.value;
+
+                    setLocalColorRanges((prev) => {
+                      const bands = { ...prev[selectedGridKPI] };
+                      bands[newColor] = bands[color];
+                      delete bands[color];
+                      return { ...prev, [selectedGridKPI]: bands };
+                    });
+                    window.refreshGridLayer?.();
+                  }}
+                  style={{ width: 24, height: 24, border: "none", marginRight: 8 }}
+                />
+
+                {/* Min */}
+                <input
+                  type="number"
+                  className="input"
+                  style={{ width: 70 }}
+                  value={min ?? ""}
+                  onChange={(e) => {
+                    const newMin = Number(e.target.value);
+                    setLocalColorRanges((prev) => ({
+                      ...prev,
+                      [selectedGridKPI]: {
+                        ...prev[selectedGridKPI],
+                        [color]: [newMin, max],
+                      },
+                    }));
+                    window.refreshGridLayer?.();
+                  }}
+                />
+
+                {/* Max */}
+                <input
+                  type="number"
+                  className="input"
+                  style={{ width: 70 }}
+                  value={max ?? ""}
+                  onChange={(e) => {
+                    const newMax = Number(e.target.value);
+                    setLocalColorRanges((prev) => ({
+                      ...prev,
+                      [selectedGridKPI]: {
+                        ...prev[selectedGridKPI],
+                        [color]: [min, newMax],
+                      },
+                    }));
+                    window.refreshGridLayer?.();
+                  }}
+                />
+
+                {/* Remove Band */}
+                <button
+                  className="btn-remove"
+                  style={{ marginLeft: 6 }}
+                  onClick={() => {
+                    setLocalColorRanges((prev) => {
+                      const updated = { ...prev[selectedGridKPI] };
+                      delete updated[color];
+                      return { ...prev, [selectedGridKPI]: updated };
+                    });
+                    window.refreshGridLayer?.();
+                  }}
+                >
+                  ❌
+                </button>
+              </div>
+            ))}
+
+            {/* === Add New Color Band === */}
+            {!addingGridColor ? (
+              <button className="btn-add" style={{ marginTop: 8 }} onClick={() => {
+                setAddingGridColor(true);
+                setNewGridColorHex("#0000ff");
+                setNewGridMin(gridLayerRange.min ?? 0);
+                setNewGridMax(gridLayerRange.max ?? 0);
+              }}>
+                + Add Color Band
+              </button>
+            ) : (
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", marginTop: 8 }}>
+                <input type="color" value={newGridColorHex ?? "#0000ff"} onChange={(e) => setNewGridColorHex(e.target.value)} style={{ width: 32, height: 32, border: "none" }} />
+                <input type="number" placeholder="Min" value={newGridMin ?? ""} onChange={(e) => setNewGridMin(Number(e.target.value))} className="input" style={{ width: 70 }} />
+                <input type="number" placeholder="Max" value={newGridMax ?? ""} onChange={(e) => setNewGridMax(Number(e.target.value))} className="input" style={{ width: 70 }} />
+                <button className="btn-add" onClick={() => {
+                  if (localColorRanges[selectedGridKPI]?.[newGridColorHex]) {
+                    toast.error("Color already exists!");
+                    return;
+                  }
+                  if (newGridMin >= newGridMax) {
+                    toast.error("Min must be less than Max.");
+                    return;
+                  }
+                  setLocalColorRanges((prev) => ({
+                    ...prev,
+                    [selectedGridKPI]: {
+                      ...prev[selectedGridKPI],
+                      [newGridColorHex]: [newGridMin, newGridMax],
+                    },
+                  }));
+                  setAddingGridColor(false);
+                  window.refreshGridLayer?.();
+                }}>
+                  ✅ Add
+                </button>
+                <button className="btn-remove" style={{ marginLeft: 6 }} onClick={() => setAddingGridColor(false)}>❌</button>
+              </div>
+            )}
+          </div>
+        )}
+
+      </div>
+
+    </div>
+  </div>
+)}
+
 
       {/* Legend popup */}
       {showLegend && (

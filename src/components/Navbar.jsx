@@ -1,4 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
+import { logoutUser } from "./Logout";
+import { checkCookieExpiration,redirectToProfile } from "./CookiesUtils";
+import { useNavigate } from 'react-router-dom';
+
 
 const Navbar = ({
   activeSubModule,
@@ -7,13 +11,21 @@ const Navbar = ({
   setSelectedProject,
 }) => {
   const [showSubModuleMenu, setShowSubModuleMenu] = useState(false);
+   const [showModuleMenu,setShowModuleMenu] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [subModulePosition, setSubModulePosition] = useState("down");
   const [dbList, setDbList] = useState([]);
+  const [selected, setSelected] = useState('Select Project');
+  const moduleMenuRef = useRef(null);
+  
 
   const subModuleBtnRef = useRef(null);
   const subModuleMenuRef = useRef(null);
 
+  const select_db = checkCookieExpiration().userData.project_codes || [];
+   
+  
+  const navigate = useNavigate();
   // 🔹 Fetch all databases from backend
   useEffect(() => {
     const fetchDatabases = async () => {
@@ -65,6 +77,9 @@ const Navbar = ({
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+
+
 
   return (
     <>
@@ -177,6 +192,34 @@ const Navbar = ({
           display: flex;
           align-items: center;
         }
+
+        .dropdown-content .dropdown-item {
+            color: #000 !important; 
+            text-decoration: none;   
+            display: block;
+            padding: 6px 10px;
+            width: 100%;
+            box-sizing: border-box; 
+          }
+
+          .dropdown-content .dropdown-item:hover {
+            background-color: #d1fae5;
+            color: #000;            
+          }
+
+
+
+        .dropdown-content .dropdown-item:hover {
+          background-color: #d1fae5;
+        }
+
+        .drop-down-model {
+          top: 100%;
+          margin-top: 6px;
+          right:50%
+        }
+
+
       `}</style>
 
       <nav className="geolytics-navbar">
@@ -193,7 +236,21 @@ const Navbar = ({
         {/* Right Section */}
         <div className="navbar-right">
           {/* Static Main Module */}
-          <button className="dropdown-btn">Module — GeoLytics</button>
+          <button 
+        className="dropdown-btn" 
+        onClick={() => setShowModuleMenu(!showModuleMenu)}
+      >
+        Module — GeoLytics <span>▾</span>
+      </button>
+  
+          {showModuleMenu && (
+            <ul className="dropdown-content drop-down-model" ref={moduleMenuRef} id="module-menu">
+              <li><a className="dropdown-item" href={`${import.meta.env.VITE_GEO_URL}/map`}>Vizbot</a></li>
+              <li><a className="dropdown-item" href={`${import.meta.env.VITE_GEO_URL}/map`}>Geolytics</a></li>
+              <li><a className="dropdown-item" href={`${import.meta.env.VITE_GEO_URL}/map`}>Automation Studio</a></li>
+              <li><a className="dropdown-item active" href={`${import.meta.env.VITE_PM_TOOL_URL}/pm_tool/create_ticket`}>PM Tool</a></li>
+            </ul>
+          )}
 
           {/* Dynamic Database Dropdown */}
           <div style={{ position: "relative" }}>
@@ -201,11 +258,37 @@ const Navbar = ({
               ref={subModuleBtnRef}
               className="dropdown-btn"
               onClick={() => setShowSubModuleMenu((prev) => !prev)}
+              // onClick={handleSelectDb}
             >
-              {selectedProject || "Select DB"} <span>▾</span>
+              {selectedProject || "Select Project"} <span>▾</span>
             </button>
-
             {showSubModuleMenu && (
+            <div ref={subModuleMenuRef}
+                className={`dropdown-content ${
+                  subModulePosition === "up" ? "drop-up" : "drop-down"
+                }`}
+                >
+                    {select_db.map((db) => (     
+                      <button
+                        key={db}
+                        className={
+                        db === selectedProject
+                          ? "dropdown-btn active"
+                          : "dropdown-btn"
+                      }
+                        onClick={() => {
+                        setActiveSubModule(db);
+                        setSelectedProject(db);
+                        setShowSubModuleMenu(false);
+                      }}
+                      >
+                        {db}
+                      </button>
+                    ))}
+                  </div>
+                )}             
+            
+              {/* {showSubModuleMenu && (
               <div
                 ref={subModuleMenuRef}
                 className={`dropdown-content ${
@@ -234,7 +317,9 @@ const Navbar = ({
                   <button disabled>Loading...</button>
                 )}
               </div>
-            )}
+            )}   */}
+
+                   
           </div>
 
           {/* Settings */}
@@ -253,8 +338,9 @@ const Navbar = ({
             </button>
             {showProfileMenu && (
               <div className="dropdown-content drop-down" style={{ right: 0 }}>
-                <button>Profile</button>
-                <button>Logout</button>
+                <button onClick={redirectToProfile}>profile</button>
+                <button onClick={logoutUser}>Logout</button>
+
               </div>
             )}
           </div>
