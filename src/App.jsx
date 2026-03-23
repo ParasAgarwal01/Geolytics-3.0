@@ -7,6 +7,12 @@ import "./Styles.css";
 import "mapbox-gl/dist/mapbox-gl.css";
 import KPIGridUploader from "./components/KPIGridUploader";
 import * as turf from "@turf/turf";
+import { Toaster, toast } from "react-hot-toast";
+
+
+
+
+
 
 // === Generation Colors (for generation overview) ===
 const generationColors = {
@@ -17,19 +23,6 @@ const generationColors = {
 };
 
 // 🕵️ Global fetch interceptor (for debugging /column-range calls)
-const oldFetch = window.fetch;
-window.fetch = async (...args) => {
-  const url = args[0];
-
-  if (typeof url === "string" && url.includes("/column-range")) {
-    console.group("🔎 FETCH INTERCEPTED");
-    console.log("URL:", url);
-    console.trace("🚨 CALL STACK TRACE");
-    console.groupEnd();
-  }
-
-  return oldFetch(...args);
-};
 
 // === Band Normalizer ===
 function normalizeBand(raw) {
@@ -104,10 +97,11 @@ const App = () => {
 
   // === Loader + Progress ===
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState({
-    progress: 0,
-    stage: "Initializing...",
-  });
+const [progress, setProgress] = useState({
+  stage: "Initializing",
+  dots: 1,
+});
+
 
   // Poll backend /progress only while loading is true
   useEffect(() => {
@@ -161,6 +155,8 @@ const App = () => {
     max: null,
   });
   const [gridMapGeoJSON, setGridMapGeoJSON] = useState(null);
+  const [showInfoPanel, setShowInfoPanel] = useState(false);
+
 
   // === Visual & Layer Controls ===
   const [radiusScale, setRadiusScale] = useState(0.1);
@@ -187,6 +183,13 @@ const App = () => {
   const [availableProjects, setAvailableProjects] = useState([]); // PHDB projects for current DB
 
   const [activeSubModule, setActiveSubModule] = useState("TPGA02");
+  const activeMapData =
+  geojsonData ||
+  driveTestGeoJSON ||
+  gridMapGeoJSON ||
+  gridGeoJSON;
+
+  
 
   // === Drive Test KPI Range ===
   useEffect(() => {
@@ -241,15 +244,15 @@ const App = () => {
         )
       : [];
   // helper in Sidebar.jsx
-  const getActiveFilterTable = () => {
-    if (targetConfigs.length > 0 && targetConfigs[0].table) {
-      return targetConfigs[0].table; // e.g. BHAZ_WCELL_4G_ZM
-    }
-    if (kpiSource.table) {
-      return kpiSource.table;
-    }
-    return phdbTable; // fallback
-  };
+  // const getActiveFilterTable = () => {
+  //   if (targetConfigs.length > 0 && targetConfigs[0].table) {
+  //     return targetConfigs[0].table; // e.g. BHAZ_WCELL_4G_ZM
+  //   }
+  //   if (kpiSource.table) {
+  //     return kpiSource.table;
+  //   }
+  //   return phdbTable; // fallback
+  // };
 
   // === Site Click Handler (for concentric bands) ===
   const handleSiteClick = (siteId, allFeatures) => {
@@ -276,207 +279,202 @@ const App = () => {
 
     setSelectedBandCell(null);
     setBandCellOptions(bandCells);
+    setShowInfoPanel(true);
   };
 
-  // === Main Map Generation (KPI / RCA / CM Change etc) ===
-  const handleGenerateMap = async (payload) => {
-    try {
-      console.group("🗺️ handleGenerateMap()");
-      setLoading(true);
+// === Main Map Generation (KPI / RCA / CM Change etc) ===
+const handleGenerateMap = async (payload) => {
+  try {
+    console.group("🗺️ handleGenerateMap()");
+    setLoading(true);
 
-      console.log("🔹 Incoming payload:", payload);
-      console.log("🔹 Current selectedProject:", selectedProject);
+    console.log("🔹 Incoming payload:", payload);
+    console.log("🔹 Current selectedProject:", selectedProject);
 
-      const projectName =
-        payload.project_name || selectedProject || "Unknown_Project";
-      if (!projectName) {
-        alert("⚠️ Please select a project before generating the map.");
-        return;
-      }
-
-      // Normalize table_type
-      let tableType = payload.table_type?.trim() || "KPI's";
-      const lowerType = tableType.toLowerCase();
-      if (lowerType.includes("rca")) tableType = "RCA";
-      else if (lowerType.includes("cm")) tableType = "CM Change";
-      else if (lowerType.includes("kpi")) tableType = "KPI's";
-
-      console.log("🧭 Final table_type:", tableType);
-
-      // Final payload (mainly for logging)
-      const finalPayload = {
-        ...payload,
-        kpiColumn: selectedLayerColumn || null,
-        project_name: projectName,
-        table_type: tableType,
-      };
-      console.log("📦 Final payload:", finalPayload);
-
-      // Build /query URL directly (Django: /api/geolytics/query)
-      const params = new URLSearchParams({
-        project: projectName,
-        table_type: tableType,
-      });
-
-      setSelectedTableType(tableType);
-      if (tableType === "CM Change") setLegendType("cmchange");
-      if (tableType === "RCA") setLegendType("rca");
-      if (tableType === "KPI's") setLegendType("kpi");
-
-      setLastPayloadTableType(tableType);
-      console.log("📍 setSelectedTableType:", tableType);
-
-      if (selectedUniqueBands?.length > 0) {
-        params.set("bands", JSON.stringify(selectedUniqueBands));
-      }
-
-      if (
-        selectedColumnValues &&
-        Object.keys(selectedColumnValues).length > 0
-      ) {
-        params.set("filters", JSON.stringify(selectedColumnValues));
-      }
-
-      const queryUrl = `${
-        import.meta.env.VITE_API_URL
-      }/query?${params.toString()}`;
-      console.log("▶️ Fetching GeoJSON + Rows from:", queryUrl);
-
-      const res = await fetch(queryUrl);
-      // ⭐ Detect backend cache hit → stop loader instantly
-      if (res.headers.get("X-Cache") === "HIT") {
-        console.log("⚡ Cache HIT from backend → stopping loader instantly");
-        setLoading(false); // stop /progress polling
-      }
-
-      if (!res.ok)
-        throw new Error(
-          `Query failed (status ${res.status} ${res.statusText})`,
-        );
-      const data = await res.json();
-
-      console.log("✅ Full API response:", data);
-
-      // --- Validate ---
-      if (!data?.features || !Array.isArray(data.features)) {
-        console.warn("⚠️ Invalid GeoJSON: missing features array");
-        alert("⚠️ No data found for the selected configuration.");
-        return;
-      }
-      if (!data.features.length) {
-        alert("⚠️ No data found for the selected configuration.");
-        return;
-      }
-
-      // --- Normalize properties (lowercase, but preserve RCA-like names) ---
-      const parsedFeatures = data.features.map((f) => ({
-        ...f,
-        properties: Object.fromEntries(
-          Object.entries(f.properties || {}).map(([k, v]) => {
-            const lower = k.toLowerCase().trim();
-
-            // Preserve RCA/error-bucket style columns
-            if (
-              k.includes(" ") ||
-              k.includes("/") ||
-              k.includes("(") ||
-              k.includes(")")
-            ) {
-              return [k.trim(), v];
-            }
-            if (lower.includes("issue") || lower.includes("analysis")) {
-              return [lower, v];
-            }
-
-            // Normalize
-            if (lower === "remarks" || lower.includes("remarks")) {
-              return ["Remarks", v];
-            }
-            if (lower === "total_score" || lower.includes("totalscore")) {
-              return ["TOTAL_SCORE", v];
-            }
-
-            return [lower, v];
-          }),
-        ),
-      }));
-
-      console.log(`🧩 Parsed ${parsedFeatures.length} GeoJSON features`);
-
-      // ✅ Update Bands
-      if (Array.isArray(data.bands) && data.bands.length > 0) {
-        const opts = data.bands.map((b) => ({ band: b, cellname: null }));
-        setBandCellOptions(opts);
-        console.log("🎨 Band options updated:", opts);
-      }
-
-      // ✅ Update KPI Columns (from backend available_kpis)
-      if (Array.isArray(data.available_kpis)) {
-        setGridKPIColumns(data.available_kpis);
-        console.log("📊 KPI columns updated:", data.available_kpis);
-      }
-
-      // ✅ Update Tabular Data
-      if (Array.isArray(data.rows) && data.rows.length > 0) {
-        console.log(`📋 ${data.rows.length} rows fetched`);
-        setTableData(data.rows);
-        setTableColumns(data.columns || Object.keys(data.rows[0] || {}));
-        console.log("🧾 Columns:", data.columns);
-
-        // Auto-map source/target columns
-        if (Array.isArray(data.columns) && data.columns.length > 0) {
-          const allCols = data.columns.map((c) => c.toString());
-
-          // Source columns: structural/identifier fields
-          const srcCols = allCols.filter((c) =>
-            /cell|lat|long|azimuth|site|band|city|target_key/i.test(c),
-          );
-
-          // Target columns: remaining (likely KPI/numeric)
-          const tgtCols = allCols.filter(
-            (c) =>
-              !srcCols.includes(c) &&
-              !/id|name|lat|long|azimuth|band|city|target_key/i.test(c),
-          );
-
-          setSourceColumnsFromSidebar(srcCols);
-          setTargetColumnsFromSidebar(tgtCols);
-
-          console.log("🧩 Auto-mapped Source Columns:", srcCols);
-          console.log("🧩 Auto-mapped Target Columns:", tgtCols);
-        }
-      }
-
-      // ✅ Push to map
-      setGeojsonData({ ...data, features: parsedFeatures });
-      // ==================================================
-      // ⭐ Apply backend color column (critical for CM Change)
-      // ==================================================
-      if (data?.color_config?.color_column) {
-        const backendCol = data.color_config.color_column.trim();
-
-        console.log("🎨 Backend color column →", backendCol);
-        setSelectedLayerColumn(backendCol); // <--- the FIX
-      }
-
-      setDriveTestGeoJSON(null);
-      setHighlightedFeature(null);
-
-      console.log(
-        `✅ Map updated successfully with ${parsedFeatures.length} features`,
-      );
-    } catch (err) {
-      console.error("❌ handleGenerateMap failed:", err);
-      alert("❌ Map generation failed. Check console for details.");
-    } finally {
-      console.groupEnd();
-      setLoading(false);
+    const projectName =
+      payload.project_name || selectedProject || "Unknown_Project";
+    if (!projectName) {
+      toast.error("⚠️ Please select a project before generating the map.");
+      return;
     }
-  };
+
+    // Normalize table_type
+    let tableType = payload.table_type?.trim() || "KPI's";
+    const lowerType = tableType.toLowerCase();
+    if (lowerType.includes("rca")) tableType = "RCA";
+    else if (lowerType.includes("cm")) tableType = "CM Change";
+    else if (lowerType.includes("kpi")) tableType = "KPI's";
+
+    console.log("🧭 Final table_type:", tableType);
+
+    // Final payload (mainly for logging)
+    const finalPayload = {
+      ...payload,
+      kpiColumn: selectedLayerColumn || null,
+      project_name: projectName,
+      table_type: tableType,
+    };
+    console.log("📦 Final payload:", finalPayload);
+
+    // Build query params
+    const params = new URLSearchParams({
+      project: projectName,
+      table_type: tableType,
+    });
+
+    // ==================================================
+    // ✅ RESPECT DATE FILTER FROM SIDEBAR (CRITICAL FIX)
+    // ==================================================
+    if (
+      window.__geoDateFilter &&
+      typeof window.__geoDateFilter === "object"
+    ) {
+      Object.entries(window.__geoDateFilter).forEach(([key, value]) => {
+        if (value != null && value !== "") {
+          params.set(key, value);
+        }
+      });
+    }
+
+    setSelectedTableType(tableType);
+    if (tableType === "CM Change") setLegendType("cmchange");
+    if (tableType === "RCA") setLegendType("rca");
+    if (tableType === "KPI's") setLegendType("kpi");
+
+    setLastPayloadTableType(tableType);
+    console.log("📍 setSelectedTableType:", tableType);
+
+    // Band filter
+    if (selectedUniqueBands?.length > 0) {
+      params.set("bands", JSON.stringify(selectedUniqueBands));
+    }
+
+    // Column filters
+    if (
+      selectedColumnValues &&
+      Object.keys(selectedColumnValues).length > 0
+    ) {
+      params.set("filters", JSON.stringify(selectedColumnValues));
+    }
+
+    const queryUrl = `${
+      import.meta.env.VITE_API_URL
+    }/query?${params.toString()}`;
+
+    console.log("▶️ Fetching GeoJSON + Rows from:", queryUrl);
+
+    const res = await fetch(queryUrl);
+
+    // ⭐ Backend cache awareness
+    // if (res.headers.get("X-Cache") === "HIT") {
+    //   console.log("⚡ Cache HIT → stopping loader instantly");
+    //   setLoading(false);
+    // }
+
+    if (!res.ok) {
+      throw new Error(
+        `Query failed (status ${res.status} ${res.statusText})`
+      );
+    }
+
+    const data = await res.json();
+    console.log("✅ Full API response:", data);
+
+    // --- Validate ---
+    if (!data?.features || !Array.isArray(data.features)) {
+      toast.error("⚠️ No data found for the selected configuration.");
+      return;
+    }
+    if (!data.features.length) {
+      toast.error("⚠️ No data found for the selected configuration.");
+      return;
+    }
+
+    // --- Normalize feature properties ---
+    const parsedFeatures = data.features.map((f) => ({
+      ...f,
+      properties: Object.fromEntries(
+        Object.entries(f.properties || {}).map(([k, v]) => {
+          const lower = k.toLowerCase().trim();
+
+          if (
+            k.includes(" ") ||
+            k.includes("/") ||
+            k.includes("(") ||
+            k.includes(")")
+          ) {
+            return [k.trim(), v];
+          }
+          if (lower.includes("issue") || lower.includes("analysis")) {
+            return [lower, v];
+          }
+          if (lower.includes("remarks")) {
+            return ["Remarks", v];
+          }
+          if (lower.includes("total_score")) {
+            return ["TOTAL_SCORE", v];
+          }
+
+          return [lower, v];
+        })
+      ),
+    }));
+
+    console.log(`🧩 Parsed ${parsedFeatures.length} GeoJSON features`);
+
+    // Bands
+    if (Array.isArray(data.bands)) {
+      setBandCellOptions(data.bands.map((b) => ({ band: b, cellname: null })));
+    }
+
+    // KPI columns
+    if (Array.isArray(data.available_kpis)) {
+      setGridKPIColumns(data.available_kpis);
+    }
+
+    // Table rows
+    if (Array.isArray(data.rows) && data.rows.length > 0) {
+      setTableData(data.rows);
+      setTableColumns(data.columns || Object.keys(data.rows[0] || {}));
+
+      const allCols = data.columns || [];
+      const srcCols = allCols.filter((c) =>
+        /cell|lat|long|azimuth|site|band|city|target_key/i.test(c)
+      );
+      const tgtCols = allCols.filter(
+        (c) => !srcCols.includes(c)
+      );
+
+      setSourceColumnsFromSidebar(srcCols);
+      setTargetColumnsFromSidebar(tgtCols);
+    }
+
+    // Push to map
+    setGeojsonData({ ...data, features: parsedFeatures });
+
+    // Backend-driven color column (CM / RCA)
+    if (data?.color_config?.color_column) {
+      setSelectedLayerColumn(data.color_config.color_column.trim());
+    }
+
+    setDriveTestGeoJSON(null);
+    setHighlightedFeature(null);
+
+    console.log(
+      `✅ Map updated successfully with ${parsedFeatures.length} features`
+    );
+  } catch (err) {
+    console.error("❌ handleGenerateMap failed:", err);
+    toast.error("❌ Map generation failed. Check console for details.");
+  } finally {
+    console.groupEnd();
+    setLoading(false);
+  }
+};
 
   // === Drive Test Upload ===
   const handleDriveTestUpload = async (file) => {
-    if (!file) return alert("⚠️ Please upload a file.");
+    if (!file) return toast.error("⚠️ Please upload a file.");
 
     setLoading(true);
     const formData = new FormData();
@@ -498,44 +496,56 @@ const App = () => {
       setDriveTestGeoJSON(data.geojson);
     } catch (err) {
       console.error("Upload error:", err);
-      alert("❌ Drive test upload failed.");
+      toast.error("❌ Drive test upload failed.");
     } finally {
       setLoading(false);
     }
   };
 
   // === Export Handler ===
-  const onExportData = async (format) => {
-    const exportData = geojsonData || driveTestGeoJSON;
-    if (!exportData) return alert("⚠️ No data to export.");
+const onExportData = async (format) => {
+  const exportData = activeMapData;
 
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/export`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ format, data: exportData }),
-      });
 
-      if (!res.ok) throw new Error("Export failed");
 
-      const blob = await res.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `geolytics-export.${format}`;
-      a.click();
-      a.remove();
-    } catch (err) {
-      console.error("Export failed:", err);
-      alert(`❌ Export ${format.toUpperCase()} failed.`);
-    }
-  };
+  if (!exportData?.features?.length)
+ {
+    toast.error("No map data available to export.");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${import.meta.env.VITE_API_URL}/export`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ format, data: exportData }),
+    });
+
+    if (!res.ok) throw new Error("Export failed");
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `geolytics-export.${format}`;
+    a.click();
+    a.remove();
+
+    toast.success(`Exported ${format.toUpperCase()} successfully!`);
+  } catch (err) {
+    console.error("Export failed:", err);
+    toast.error(`Export ${format.toUpperCase()} failed.`);
+  }
+};
+
 
   const handleSidebarSearch = (feature) => setHighlightedFeature(feature);
 
   // === JSX ===
   return (
     <div className="app-container">
+      <Toaster position="bottom-center" />
+
       {/* Navbar: DB selection comes through selectedDatabase */}
       <Navbar
         activeSubModule={activeSubModule}
@@ -563,7 +573,13 @@ const App = () => {
           setGridMapGeoJSON={setGridMapGeoJSON}
           driveTestColumns={driveTestColumns}
           setDriveTestColumns={setDriveTestColumns}
+          activeMapData={activeMapData}
           geojsonData={geojsonData}
+
+          // Provide App-level loader so Sidebar can trigger it immediately
+          setLoading={setLoading}
+          loading={loading}
+
           setDriveTestGeojson={setDriveTestGeoJSON}
           driveTestData={driveTestGeoJSON}
           onGenerateMap={handleGenerateMap}
@@ -615,7 +631,7 @@ const App = () => {
           setSelectedProject={setSelectedProject}
           availableProjects={availableProjects}
           setAvailableProjects={setAvailableProjects}
-          setLoading={setLoading}
+          
         />
       </div>
 
@@ -631,15 +647,17 @@ const App = () => {
         <MapRenderer
           radiusScale={radiusScale}
           mapStyle={mapStyle}
-          geojsonData={geojsonData}
+          geojsonData={activeMapData}
+
           driveTestGeoJSON={driveTestGeoJSON}
           highlightedFeature={highlightedFeature}
           selectedKPI={selectedLayerColumn}
           selectedBandColumn={selectedBandColumn}
           legendType={legendType}
           colorColumn={
-            selectedLayerColumn || geojsonData?.color_config?.color_column
-          }
+  selectedLayerColumn || activeMapData?.color_config?.color_column
+}
+
           colorBands={colorBands}
           bandColorBands={bandColorBands}
           colorRanges={colorRanges}
@@ -667,15 +685,18 @@ const App = () => {
           availableProjects={availableProjects}
         />
       </div>
+      
+
 
       {/* Loader + Progress Overlay */}
       {loading && (
         <div className="loader-wrapper">
           <div className="loader"></div>
           <div className="progress-text">
-            {progress.stage} <br />
-            <strong>{progress.progress}%</strong>
-          </div>
+  {progress.stage}{" "}
+  {".".repeat(progress.dots || 1)}
+</div>
+
         </div>
       )}
     </div>
